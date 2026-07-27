@@ -1,0 +1,9 @@
+<resources>
+    <style name="Theme.Vitalis" parent="android:style/Theme.Material.Light.NoActionBar">
+        <item name="android:fontFamily">sans</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:statusBarColor">@color/vitalis_green</item>
+        <item name="android:navigationBarColor">@color/vitalis_green</item>
+        <item name="android:windowBackground">@color/vitalis_cream</item>
+    </style>
+</resources>
