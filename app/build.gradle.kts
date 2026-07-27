@@ -11,8 +11,8 @@ android {
         applicationId = "com.vitalis.healthos"
         minSdk = 28
         targetSdk = 35
-        versionCode = 2
-        versionName = "2.0.0-native"
+        versionCode = 3
+        versionName = "2.1.0-native"
     }
 
     buildTypes {
