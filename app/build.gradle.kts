@@ -5,7 +5,7 @@ plugins {
 
 android {
     namespace = "com.vitalis.healthos"
-    compileSdk = 35
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "com.vitalis.healthos"
