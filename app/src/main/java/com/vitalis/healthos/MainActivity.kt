@@ -1,18 +1,20 @@
 package com.vitalis.healthos
 
-import android.annotation.SuppressLint
 import android.content.ActivityNotFoundException
 import android.content.Intent
+import android.graphics.Color
+import android.graphics.Typeface
+import android.graphics.drawable.GradientDrawable
 import android.net.Uri
 import android.os.Bundle
-import android.graphics.Bitmap
-import android.webkit.CookieManager
-import android.webkit.JavascriptInterface
-import android.webkit.WebResourceRequest
-import android.webkit.WebView
-import android.webkit.WebViewClient
+import android.view.Gravity
+import android.view.View
+import android.view.ViewGroup
+import android.widget.Button
+import android.widget.LinearLayout
+import android.widget.ScrollView
+import android.widget.TextView
 import androidx.activity.ComponentActivity
-import androidx.activity.OnBackPressedCallback
 import androidx.health.connect.client.HealthConnectClient
 import androidx.health.connect.client.PermissionController
 import androidx.health.connect.client.permission.HealthPermission
@@ -32,11 +34,26 @@ import androidx.health.connect.client.records.SleepSessionRecord
 import androidx.health.connect.client.records.StepsRecord
 import androidx.health.connect.client.records.TotalCaloriesBurnedRecord
 import androidx.health.connect.client.records.WeightRecord
-import org.json.JSONObject
+import androidx.health.connect.client.request.ReadRecordsRequest
+import androidx.health.connect.client.time.TimeRangeFilter
+import androidx.lifecycle.lifecycleScope
+import kotlinx.coroutines.launch
+import java.time.Duration
+import java.time.Instant
+import java.time.LocalDate
+import java.time.ZoneId
+import java.time.temporal.ChronoUnit
+import java.util.Locale
 
 class MainActivity : ComponentActivity() {
-    private lateinit var webView: WebView
     private var healthConnectClient: HealthConnectClient? = null
+    private lateinit var statusText: TextView
+    private lateinit var stepsValue: TextView
+    private lateinit var sleepValue: TextView
+    private lateinit var exerciseValue: TextView
+    private lateinit var hydrationValue: TextView
+    private lateinit var coachText: TextView
+    private lateinit var connectButton: Button
 
     private val healthPermissions = setOf(
         HealthPermission.getReadPermission(StepsRecord::class),
@@ -60,114 +77,229 @@ class MainActivity : ComponentActivity() {
     private val permissionLauncher = registerForActivityResult(
         PermissionController.createRequestPermissionResultContract()
     ) { granted ->
-        val allGranted = granted.containsAll(healthPermissions)
-        notifyWeb(
-            granted = allGranted,
-            status = if (allGranted) "authorized" else "partial",
-            message = if (allGranted) {
-                "Health Connect est autorisé. Vitalis peut synchroniser les catégories choisies."
-            } else {
-                "Autorisation partielle. Vous pouvez compléter les catégories dans Health Connect."
-            }
-        )
+        statusText.text = if (granted.isEmpty()) {
+            "Autorisation refusée — choisissez au moins une catégorie"
+        } else {
+            "Health Connect autorisé — synchronisation en cours"
+        }
+        refreshHealthData()
     }
 
-    @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        window.statusBarColor = Color.parseColor("#073F32")
+        window.navigationBarColor = Color.parseColor("#073F32")
+        setContentView(buildNativeDashboard())
+        initializeHealthConnect()
+    }
 
-        if (HealthConnectClient.getSdkStatus(this) == HealthConnectClient.SDK_AVAILABLE) {
-            healthConnectClient = HealthConnectClient.getOrCreate(this)
-        }
-
-        webView = WebView(this).apply {
-            settings.javaScriptEnabled = true
-            settings.domStorageEnabled = true
-            settings.allowFileAccess = false
-            settings.allowContentAccess = false
-            settings.mixedContentMode = android.webkit.WebSettings.MIXED_CONTENT_NEVER_ALLOW
-            WebView.setWebContentsDebuggingEnabled(BuildConfig.DEBUG)
-            CookieManager.getInstance().setAcceptCookie(true)
-            CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
-            configureBridgeForHost(VITALIS_HOST)
-            webViewClient = object : WebViewClient() {
-                override fun shouldOverrideUrlLoading(
-                    view: WebView,
-                    request: WebResourceRequest
-                ): Boolean {
-                    val uri = request.url
-                    val host = uri.host.orEmpty()
-                    return if (uri.scheme == "https" && isTrustedAppHost(host)) {
-                        configureBridgeForHost(host)
-                        false
-                    } else {
-                        startActivity(Intent(Intent.ACTION_VIEW, uri))
-                        true
-                    }
-                }
-
-                override fun onPageStarted(view: WebView, url: String, favicon: Bitmap?) {
-                    configureBridgeForHost(Uri.parse(url).host.orEmpty())
-                    super.onPageStarted(view, url, favicon)
-                }
+    private fun initializeHealthConnect() {
+        when (HealthConnectClient.getSdkStatus(this)) {
+            HealthConnectClient.SDK_AVAILABLE -> {
+                healthConnectClient = HealthConnectClient.getOrCreate(this)
+                statusText.text = "Health Connect disponible"
+                refreshHealthData()
             }
-            loadUrl(VITALIS_URL)
-        }
-        setContentView(webView)
-
-        onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
-            override fun handleOnBackPressed() {
-                if (webView.canGoBack()) webView.goBack() else finish()
+            HealthConnectClient.SDK_UNAVAILABLE_PROVIDER_UPDATE_REQUIRED -> {
+                statusText.text = "Health Connect doit être installé ou mis à jour"
+                connectButton.text = "Installer Health Connect"
+                connectButton.setOnClickListener { openHealthConnectStore() }
             }
+            else -> {
+                statusText.text = "Health Connect n’est pas disponible sur cet appareil"
+                connectButton.isEnabled = false
+            }
+        }
+    }
+
+    private fun buildNativeDashboard(): View {
+        val scroll = ScrollView(this).apply {
+            setBackgroundColor(Color.parseColor("#F7F5EE"))
+        }
+        val root = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(20), dp(28), dp(20), dp(36))
+        }
+        scroll.addView(root, ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+
+        root.addView(TextView(this).apply {
+            text = "Vitalis Health OS"
+            setTextColor(Color.parseColor("#073F32"))
+            textSize = 29f
+            typeface = Typeface.create("serif", Typeface.BOLD)
         })
-    }
+        root.addView(TextView(this).apply {
+            text = "Votre santé, directement sur Android"
+            setTextColor(Color.parseColor("#6F7C75"))
+            textSize = 14f
+            setPadding(0, dp(4), 0, dp(20))
+        })
 
-    private fun isTrustedAppHost(host: String): Boolean {
-        return host == VITALIS_HOST ||
-            host.endsWith(".chatgpt.site") ||
-            host == "chatgpt.com" ||
-            host.endsWith(".chatgpt.com") ||
-            host == "openai.com" ||
-            host.endsWith(".openai.com")
-    }
-
-    private fun configureBridgeForHost(host: String) {
-        webView.removeJavascriptInterface("VitalisAndroid")
-        if (host == VITALIS_HOST) {
-            webView.addJavascriptInterface(VitalisAndroidBridge(), "VitalisAndroid")
+        val hero = panel("#073F32").apply {
+            setPadding(dp(20), dp(20), dp(20), dp(20))
         }
+        hero.addView(TextView(this).apply {
+            text = "PRÊT POUR AUJOURD’HUI"
+            setTextColor(Color.parseColor("#8EE0B2"))
+            textSize = 12f
+            typeface = Typeface.DEFAULT_BOLD
+        })
+        hero.addView(TextView(this).apply {
+            text = "Votre tableau de bord natif"
+            setTextColor(Color.WHITE)
+            textSize = 25f
+            typeface = Typeface.create("serif", Typeface.BOLD)
+            setPadding(0, dp(10), 0, dp(7))
+        })
+        statusText = TextView(this).apply {
+            text = "Initialisation de Health Connect…"
+            setTextColor(Color.parseColor("#C5DACE"))
+            textSize = 14f
+        }
+        hero.addView(statusText)
+        connectButton = Button(this).apply {
+            text = "Autoriser Health Connect"
+            isAllCaps = false
+            setTextColor(Color.parseColor("#073F32"))
+            setBackgroundColor(Color.parseColor("#75D69E"))
+            setPadding(dp(12), dp(4), dp(12), dp(4))
+            setOnClickListener { permissionLauncher.launch(healthPermissions) }
+        }
+        hero.addView(connectButton, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(52)).apply { topMargin = dp(18) })
+        root.addView(hero, fullWidthMargins(0, 0, 0, 16))
+
+        stepsValue = metricCard(root, "PAS AUJOURD’HUI", "—", "Objectif 8 000 pas", "#EAF7EF")
+        sleepValue = metricCard(root, "SOMMEIL (24 H)", "—", "Durée détectée", "#F0EEFA")
+        exerciseValue = metricCard(root, "ACTIVITÉ", "—", "Minutes d’exercice aujourd’hui", "#EAF5F7")
+        hydrationValue = metricCard(root, "HYDRATATION", "—", "Objectif 2,0 L", "#EAF4FA")
+
+        val coach = panel("#FFFFFF")
+        coach.addView(TextView(this).apply {
+            text = "KOFI · COACH VITALIS"
+            setTextColor(Color.parseColor("#258055"))
+            textSize = 12f
+            typeface = Typeface.DEFAULT_BOLD
+        })
+        coachText = TextView(this).apply {
+            text = "Connectez Health Connect pour recevoir une recommandation adaptée à votre journée."
+            setTextColor(Color.parseColor("#29483A"))
+            textSize = 16f
+            setLineSpacing(0f, 1.25f)
+            setPadding(0, dp(12), 0, 0)
+        }
+        coach.addView(coachText)
+        root.addView(coach, fullWidthMargins(0, 4, 0, 16))
+
+        root.addView(TextView(this).apply {
+            text = "Les données affichées sont lues localement depuis Health Connect. Aucune connexion au site ChatGPT n’est nécessaire."
+            setTextColor(Color.parseColor("#7B8981"))
+            textSize = 12f
+            gravity = Gravity.CENTER
+            setPadding(dp(8), dp(8), dp(8), 0)
+        })
+        return scroll
     }
 
-    inner class VitalisAndroidBridge {
-        @JavascriptInterface
-        fun isNativeApp(): Boolean = true
+    private fun metricCard(root: LinearLayout, title: String, initial: String, subtitle: String, color: String): TextView {
+        val card = panel(color)
+        card.addView(TextView(this).apply {
+            text = title
+            setTextColor(Color.parseColor("#48705B"))
+            textSize = 12f
+            typeface = Typeface.DEFAULT_BOLD
+        })
+        val value = TextView(this).apply {
+            text = initial
+            setTextColor(Color.parseColor("#0A4335"))
+            textSize = 35f
+            typeface = Typeface.create("serif", Typeface.BOLD)
+            setPadding(0, dp(8), 0, dp(4))
+        }
+        card.addView(value)
+        card.addView(TextView(this).apply {
+            text = subtitle
+            setTextColor(Color.parseColor("#718078"))
+            textSize = 13f
+        })
+        root.addView(card, fullWidthMargins(0, 0, 0, 12))
+        return value
+    }
 
-        @JavascriptInterface
-        fun requestHealthConnectPermissions() {
-            runOnUiThread {
-                when (HealthConnectClient.getSdkStatus(this@MainActivity)) {
-                    HealthConnectClient.SDK_AVAILABLE -> permissionLauncher.launch(healthPermissions)
-                    HealthConnectClient.SDK_UNAVAILABLE_PROVIDER_UPDATE_REQUIRED -> {
-                        notifyWeb(false, "update_required", "Health Connect doit être installé ou mis à jour.")
-                        openHealthConnectStore()
-                    }
-                    else -> notifyWeb(
-                        false,
-                        "unavailable",
-                        "Health Connect n’est pas disponible sur cet appareil Android."
-                    )
-                }
-            }
+    private fun panel(color: String): LinearLayout = LinearLayout(this).apply {
+        orientation = LinearLayout.VERTICAL
+        setPadding(dp(18), dp(18), dp(18), dp(18))
+        background = GradientDrawable().apply {
+            cornerRadius = dp(20).toFloat()
+            setColor(Color.parseColor(color))
+            setStroke(dp(1), Color.parseColor("#DDE6E0"))
+        }
+        elevation = dp(2).toFloat()
+    }
+
+    private fun fullWidthMargins(left: Int, top: Int, right: Int, bottom: Int) =
+        LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+            setMargins(dp(left), dp(top), dp(right), dp(bottom))
         }
 
-        @JavascriptInterface
-        fun openHealthConnectSettings() {
-            runOnUiThread {
-                try {
-                    startActivity(Intent(HealthConnectClient.ACTION_HEALTH_CONNECT_SETTINGS))
-                } catch (_: ActivityNotFoundException) {
-                    openHealthConnectStore()
+    private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
+
+    private fun refreshHealthData() {
+        val client = healthConnectClient ?: return
+        lifecycleScope.launch {
+            runCatching {
+                val granted = client.permissionController.getGrantedPermissions()
+                if (granted.isEmpty()) {
+                    statusText.text = "Appuyez sur « Autoriser Health Connect »"
+                    return@launch
                 }
+                connectButton.text = "Modifier les autorisations"
+                statusText.text = "Connecté · données actualisées"
+
+                val now = Instant.now()
+                val zone = ZoneId.systemDefault()
+                val startToday = LocalDate.now(zone).atStartOfDay(zone).toInstant()
+                var steps = 0L
+
+                if (HealthPermission.getReadPermission(StepsRecord::class) in granted) {
+                    val records = client.readRecords(
+                        ReadRecordsRequest(StepsRecord::class, TimeRangeFilter.between(startToday, now))
+                    ).records
+                    steps = records.sumOf { it.count }
+                    stepsValue.text = String.format(Locale.getDefault(), "%,d", steps)
+                } else stepsValue.text = "Non autorisé"
+
+                if (HealthPermission.getReadPermission(SleepSessionRecord::class) in granted) {
+                    val records = client.readRecords(
+                        ReadRecordsRequest(SleepSessionRecord::class, TimeRangeFilter.between(now.minus(24, ChronoUnit.HOURS), now))
+                    ).records
+                    val minutes = records.sumOf { Duration.between(it.startTime, it.endTime).toMinutes() }
+                    sleepValue.text = "${minutes / 60} h ${minutes % 60}"
+                } else sleepValue.text = "Non autorisé"
+
+                if (HealthPermission.getReadPermission(ExerciseSessionRecord::class) in granted) {
+                    val records = client.readRecords(
+                        ReadRecordsRequest(ExerciseSessionRecord::class, TimeRangeFilter.between(startToday, now))
+                    ).records
+                    val minutes = records.sumOf { Duration.between(it.startTime, it.endTime).toMinutes() }
+                    exerciseValue.text = "$minutes min"
+                } else exerciseValue.text = "Non autorisé"
+
+                if (HealthPermission.getReadPermission(HydrationRecord::class) in granted) {
+                    val records = client.readRecords(
+                        ReadRecordsRequest(HydrationRecord::class, TimeRangeFilter.between(startToday, now))
+                    ).records
+                    val liters = records.sumOf { it.volume.inLiters }
+                    hydrationValue.text = String.format(Locale.getDefault(), "%.1f L", liters)
+                } else hydrationValue.text = "Non autorisé"
+
+                coachText.text = when {
+                    steps < 2000 -> "Commencez doucement : une marche de 10 minutes aidera votre circulation et votre énergie."
+                    steps < 8000 -> "Bonne progression. Une courte marche supplémentaire vous rapprochera de votre objectif de 8 000 pas."
+                    else -> "Objectif de pas atteint. Priorisez maintenant l’hydratation et la récupération."
+                }
+            }.onFailure {
+                statusText.text = "Impossible de lire certaines données · vérifiez les autorisations"
+                coachText.text = "Health Connect est disponible, mais certaines catégories doivent encore être autorisées."
             }
         }
     }
@@ -177,31 +309,7 @@ class MainActivity : ComponentActivity() {
         try {
             startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("market://details?id=$packageName")))
         } catch (_: ActivityNotFoundException) {
-            startActivity(
-                Intent(
-                    Intent.ACTION_VIEW,
-                    Uri.parse("https://play.google.com/store/apps/details?id=$packageName")
-                )
-            )
+            startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://play.google.com/store/apps/details?id=$packageName")))
         }
-    }
-
-    private fun notifyWeb(granted: Boolean, status: String, message: String) {
-        val detail = JSONObject().apply {
-            put("granted", granted)
-            put("status", status)
-            put("message", message)
-        }.toString()
-        runOnUiThread {
-            webView.evaluateJavascript(
-                "window.dispatchEvent(new CustomEvent('vitalis-health-connect',{detail:$detail}));",
-                null
-            )
-        }
-    }
-
-    companion object {
-        private const val VITALIS_HOST = "vitalis-health-os.gillesarnaudasse65.chatgpt.site"
-        private const val VITALIS_URL = "https://$VITALIS_HOST"
     }
 }
