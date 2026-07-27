@@ -5,6 +5,8 @@ import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
+import android.graphics.Bitmap
+import android.webkit.CookieManager
 import android.webkit.JavascriptInterface
 import android.webkit.WebResourceRequest
 import android.webkit.WebView
@@ -85,19 +87,28 @@ class MainActivity : ComponentActivity() {
             settings.allowContentAccess = false
             settings.mixedContentMode = android.webkit.WebSettings.MIXED_CONTENT_NEVER_ALLOW
             WebView.setWebContentsDebuggingEnabled(BuildConfig.DEBUG)
-            addJavascriptInterface(VitalisAndroidBridge(), "VitalisAndroid")
+            CookieManager.getInstance().setAcceptCookie(true)
+            CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
+            configureBridgeForHost(VITALIS_HOST)
             webViewClient = object : WebViewClient() {
                 override fun shouldOverrideUrlLoading(
                     view: WebView,
                     request: WebResourceRequest
                 ): Boolean {
                     val uri = request.url
-                    return if (uri.host == VITALIS_HOST) {
+                    val host = uri.host.orEmpty()
+                    return if (uri.scheme == "https" && isTrustedAppHost(host)) {
+                        configureBridgeForHost(host)
                         false
                     } else {
                         startActivity(Intent(Intent.ACTION_VIEW, uri))
                         true
                     }
+                }
+
+                override fun onPageStarted(view: WebView, url: String, favicon: Bitmap?) {
+                    configureBridgeForHost(Uri.parse(url).host.orEmpty())
+                    super.onPageStarted(view, url, favicon)
                 }
             }
             loadUrl(VITALIS_URL)
@@ -109,6 +120,22 @@ class MainActivity : ComponentActivity() {
                 if (webView.canGoBack()) webView.goBack() else finish()
             }
         })
+    }
+
+    private fun isTrustedAppHost(host: String): Boolean {
+        return host == VITALIS_HOST ||
+            host.endsWith(".chatgpt.site") ||
+            host == "chatgpt.com" ||
+            host.endsWith(".chatgpt.com") ||
+            host == "openai.com" ||
+            host.endsWith(".openai.com")
+    }
+
+    private fun configureBridgeForHost(host: String) {
+        webView.removeJavascriptInterface("VitalisAndroid")
+        if (host == VITALIS_HOST) {
+            webView.addJavascriptInterface(VitalisAndroidBridge(), "VitalisAndroid")
+        }
     }
 
     inner class VitalisAndroidBridge {
