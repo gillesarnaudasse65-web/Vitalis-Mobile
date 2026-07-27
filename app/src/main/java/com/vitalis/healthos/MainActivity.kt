@@ -11,9 +11,13 @@ import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
 import android.widget.Button
+import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
+import android.widget.Toast
+import android.app.AlertDialog
+import android.speech.tts.TextToSpeech
 import androidx.activity.ComponentActivity
 import androidx.health.connect.client.HealthConnectClient
 import androidx.health.connect.client.PermissionController
@@ -45,7 +49,7 @@ import java.time.ZoneId
 import java.time.temporal.ChronoUnit
 import java.util.Locale
 
-class MainActivity : ComponentActivity() {
+class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
     private var healthConnectClient: HealthConnectClient? = null
     private lateinit var statusText: TextView
     private lateinit var stepsValue: TextView
@@ -54,6 +58,9 @@ class MainActivity : ComponentActivity() {
     private lateinit var hydrationValue: TextView
     private lateinit var coachText: TextView
     private lateinit var connectButton: Button
+    private var textToSpeech: TextToSpeech? = null
+    private var selectedCoach = "Kofi"
+    private var isEnglish = false
 
     private val healthPermissions = setOf(
         HealthPermission.getReadPermission(StepsRecord::class),
@@ -89,6 +96,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         window.statusBarColor = Color.parseColor("#073F32")
         window.navigationBarColor = Color.parseColor("#073F32")
+        textToSpeech = TextToSpeech(this, this)
         setContentView(buildNativeDashboard())
         initializeHealthConnect()
     }
@@ -129,11 +137,22 @@ class MainActivity : ComponentActivity() {
             typeface = Typeface.create("serif", Typeface.BOLD)
         })
         root.addView(TextView(this).apply {
-            text = "Votre santé, directement sur Android"
+            text = if (isEnglish) "Your health, directly on Android" else "Votre santé, directement sur Android"
             setTextColor(Color.parseColor("#6F7C75"))
             textSize = 14f
-            setPadding(0, dp(4), 0, dp(20))
+            setPadding(0, dp(4), 0, dp(12))
         })
+
+        val controls = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        controls.addView(smallButton(if (isEnglish) "EN · Language" else "FR · Langue") {
+            isEnglish = !isEnglish
+            textToSpeech?.language = if (isEnglish) Locale.ENGLISH else Locale.FRENCH
+            setContentView(buildNativeDashboard())
+            refreshHealthData()
+        }, LinearLayout.LayoutParams(0, dp(44), 1f))
+        controls.addView(smallButton("Coach · " + selectedCoach) { chooseCoach() },
+            LinearLayout.LayoutParams(0, dp(44), 1f).apply { leftMargin = dp(8) })
+        root.addView(controls, fullWidthMargins(0, 0, 0, 18))
 
         val hero = panel("#073F32").apply {
             setPadding(dp(20), dp(20), dp(20), dp(20))
@@ -171,11 +190,27 @@ class MainActivity : ComponentActivity() {
         stepsValue = metricCard(root, "PAS AUJOURD’HUI", "—", "Objectif 8 000 pas", "#EAF7EF")
         sleepValue = metricCard(root, "SOMMEIL (24 H)", "—", "Durée détectée", "#F0EEFA")
         exerciseValue = metricCard(root, "ACTIVITÉ", "—", "Minutes d’exercice aujourd’hui", "#EAF5F7")
-        hydrationValue = metricCard(root, "HYDRATATION", "—", "Objectif 2,0 L", "#EAF4FA")
+        hydrationValue = metricCard(root, if (isEnglish) "HYDRATION" else "HYDRATATION", "—", if (isEnglish) "Goal 2.0 L" else "Objectif 2,0 L", "#EAF4FA")
+
+        root.addView(TextView(this).apply {
+            text = if (isEnglish) "Quick actions" else "Actions rapides"
+            setTextColor(Color.parseColor("#073F32"))
+            textSize = 20f
+            typeface = Typeface.DEFAULT_BOLD
+            setPadding(0, dp(10), 0, dp(10))
+        })
+        val quickOne = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        quickOne.addView(actionButton(if (isEnglish) "Record activity" else "Enregistrer activité", "activity"), LinearLayout.LayoutParams(0, dp(58), 1f))
+        quickOne.addView(actionButton(if (isEnglish) "Add water" else "Ajouter de l’eau", "water"), LinearLayout.LayoutParams(0, dp(58), 1f).apply { leftMargin = dp(8) })
+        root.addView(quickOne, fullWidthMargins(0, 0, 0, 8))
+        val quickTwo = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        quickTwo.addView(actionButton(if (isEnglish) "Record sleep" else "Enregistrer sommeil", "sleep"), LinearLayout.LayoutParams(0, dp(58), 1f))
+        quickTwo.addView(actionButton(if (isEnglish) "Mood check-in" else "Noter l’humeur", "mood"), LinearLayout.LayoutParams(0, dp(58), 1f).apply { leftMargin = dp(8) })
+        root.addView(quickTwo, fullWidthMargins(0, 0, 0, 18))
 
         val coach = panel("#FFFFFF")
         coach.addView(TextView(this).apply {
-            text = "KOFI · COACH VITALIS"
+            text = selectedCoach.uppercase() + " · COACH VITALIS"
             setTextColor(Color.parseColor("#258055"))
             textSize = 12f
             typeface = Typeface.DEFAULT_BOLD
@@ -188,6 +223,8 @@ class MainActivity : ComponentActivity() {
             setPadding(0, dp(12), 0, 0)
         }
         coach.addView(coachText)
+        coach.addView(smallButton(if (isEnglish) "Listen to my coach" else "Écouter mon coach") { speakCoach() },
+            LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(46)).apply { topMargin = dp(14) })
         root.addView(coach, fullWidthMargins(0, 4, 0, 16))
 
         root.addView(TextView(this).apply {
@@ -198,6 +235,65 @@ class MainActivity : ComponentActivity() {
             setPadding(dp(8), dp(8), dp(8), 0)
         })
         return scroll
+    }
+
+    private fun smallButton(label: String, action: () -> Unit): Button = Button(this).apply {
+        text = label
+        isAllCaps = false
+        setTextColor(Color.parseColor("#174B36"))
+        setBackgroundColor(Color.parseColor("#E7F3EB"))
+        setOnClickListener { action() }
+    }
+
+    private fun actionButton(label: String, type: String): Button = Button(this).apply {
+        text = label
+        isAllCaps = false
+        setTextColor(Color.WHITE)
+        setBackgroundColor(Color.parseColor("#287B50"))
+        setOnClickListener { showQuickAction(type) }
+    }
+
+    private fun showQuickAction(type: String) {
+        val field = EditText(this).apply {
+            hint = when (type) {
+                "water" -> "250 ml"
+                "sleep" -> "22:30 - 06:30"
+                "activity" -> "Marche, course, musculation…"
+                else -> "Comment vous sentez-vous ?"
+            }
+            setPadding(dp(18), dp(14), dp(18), dp(14))
+        }
+        AlertDialog.Builder(this).setTitle(when (type) {
+            "water" -> "Hydratation"; "sleep" -> "Sommeil"; "activity" -> "Activité"; else -> "Humeur"
+        }).setView(field).setNegativeButton("Annuler", null).setPositiveButton("Enregistrer") { _, _ ->
+            Toast.makeText(this, "Information enregistrée dans Vitalis", Toast.LENGTH_SHORT).show()
+        }.show()
+    }
+
+    private fun chooseCoach() {
+        val coaches = arrayOf("Kofi · récupération", "Aïna · performance", "Malik · équilibre")
+        AlertDialog.Builder(this).setTitle("Choisir votre coach").setItems(coaches) { _, which ->
+            selectedCoach = arrayOf("Kofi", "Aïna", "Malik")[which]
+            setContentView(buildNativeDashboard())
+            refreshHealthData()
+        }.show()
+    }
+
+    private fun speakCoach() {
+        val pitch = when (selectedCoach) { "Aïna" -> 1.12f; "Malik" -> 0.92f; else -> 0.82f }
+        textToSpeech?.setPitch(pitch)
+        textToSpeech?.setSpeechRate(if (selectedCoach == "Aïna") 1.04f else 0.94f)
+        textToSpeech?.speak(coachText.text.toString(), TextToSpeech.QUEUE_FLUSH, null, "vitalis-coach")
+    }
+
+    override fun onInit(status: Int) {
+        if (status == TextToSpeech.SUCCESS) textToSpeech?.language = if (isEnglish) Locale.ENGLISH else Locale.FRENCH
+    }
+
+    override fun onDestroy() {
+        textToSpeech?.stop()
+        textToSpeech?.shutdown()
+        super.onDestroy()
     }
 
     private fun metricCard(root: LinearLayout, title: String, initial: String, subtitle: String, color: String): TextView {
