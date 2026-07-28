@@ -11,8 +11,8 @@ android {
         applicationId = "com.vitalis.healthos"
         minSdk = 28
         targetSdk = 35
-        versionCode = 6
-        versionName = "3.2.0-v12-health-connect"
+        versionCode = 7
+        versionName = "3.3.0-v12-connectors"
     }
 
     buildTypes {
