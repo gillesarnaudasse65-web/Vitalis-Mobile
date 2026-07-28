@@ -167,7 +167,7 @@ class MainActivity : ComponentActivity() {
             settings.allowContentAccess = false
             settings.mediaPlaybackRequiresUserGesture = false
             settings.mixedContentMode = android.webkit.WebSettings.MIXED_CONTENT_NEVER_ALLOW
-            settings.userAgentString = settings.userAgentString + " VitalisAndroid/3.7"
+            settings.userAgentString = settings.userAgentString + " VitalisAndroid/3.8"
             WebView.setWebContentsDebuggingEnabled(BuildConfig.DEBUG)
             addJavascriptInterface(VitalisAndroidBridge(), "VitalisAndroid")
             webChromeClient = object : WebChromeClient() {
@@ -205,7 +205,7 @@ class MainActivity : ComponentActivity() {
                     if (host == VITALIS_HOST) remotePageFinished = true
                     if (host == VITALIS_HOST || host == LOCAL_ASSET_HOST) injectClassicCompatibility(view)
                     view.evaluateJavascript(
-                        "window.dispatchEvent(new CustomEvent('vitalis-native-ready',{detail:{platform:'android',version:'3.7'}}));",
+                        "window.dispatchEvent(new CustomEvent('vitalis-native-ready',{detail:{platform:'android',version:'3.8'}}));",
                         null
                     )
                     readHealthData()
