@@ -7,6 +7,10 @@ Application Android Vitalis Health OS avec interface classique, passerelle Healt
 - L’interface classique reste inchangée et demeure l’interface principale.
 - La version 3.9.1 conserve strictement l’interface historique du site : les anciens boutons sont rendus fonctionnels sans ajouter de barre ou de boutons flottants.
 - Le chargement de l’interface classique dispose de délais plus adaptés aux connexions mobiles et de deux nouvelles tentatives avant le mode hors ligne.
+- La version 3.10 synchronise les données Health Connect sur la journée choisie dans le calendrier, puis actualise les cartes visibles et leurs sources.
+- Les répétitions de coach sont réduites : le coach principal reste disponible, tandis qu’une carte dupliquée devient l’espace Nutrition du jour.
+- L’espace Nutrition affiche repas, calories, glucides, protéines, lipides et fibres, avec accès au détail complet.
+- Les rubriques existantes Activité, Sommeil, Signes vitaux, Nutrition, Bien-être mental, Dossier santé et Connexions ouvrent désormais leurs données ou analyses fonctionnelles.
 - **Kofi, coach IA** utilise désormais l’API OpenAI Responses pour répondre aux questions et analyser les données Vitalis autorisées.
 - Les analyses IA précédentes sont reliées au même moteur : bilan santé, score, nutrition, activité, sommeil, récupération, stress, recommandations et rapport personnalisé.
 - Les boutons IA de l’interface classique sont reconnus par leur libellé et ouvrent automatiquement l’analyse correspondante.
