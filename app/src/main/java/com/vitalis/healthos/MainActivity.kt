@@ -71,6 +71,8 @@ import java.nio.charset.StandardCharsets
 import java.security.KeyStore
 import java.time.Duration
 import java.time.Instant
+import java.time.LocalDate
+import java.time.ZoneId
 import java.util.Locale
 import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
@@ -352,6 +354,16 @@ class MainActivity : ComponentActivity() {
         @JavascriptInterface
         fun refreshHealthData() {
             readHealthData()
+        }
+
+        @JavascriptInterface
+        fun refreshHealthDataForDate(dateIso: String) {
+            val requestedDate = runCatching { LocalDate.parse(dateIso.trim()) }.getOrNull()
+            if (requestedDate == null) {
+                dispatchSyncState("error", "Date invalide : $dateIso")
+                return
+            }
+            readHealthData(requestedDate)
         }
 
         @JavascriptInterface
@@ -783,7 +795,7 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun readHealthData() {
+    private fun readHealthData(selectedDate: LocalDate = LocalDate.now()) {
         val client = healthConnectClient
         if (client == null) {
             dispatchConnectorStatus(emptyList())
@@ -800,6 +812,11 @@ class MainActivity : ComponentActivity() {
             }
             runCatching {
                 val now = Instant.now()
+                val zone = ZoneId.systemDefault()
+                val today = LocalDate.now(zone)
+                val rangeStart = selectedDate.atStartOfDay(zone).toInstant()
+                val nextDayStart = selectedDate.plusDays(1).atStartOfDay(zone).toInstant()
+                val rangeEnd = if (selectedDate == today && now.isBefore(nextDayStart)) now else nextDayStart
                 val filter = TimeRangeFilter.between(now.minus(Duration.ofDays(30)), now)
                 val steps = if (HealthPermission.getReadPermission(StepsRecord::class) in granted) client.readRecords(ReadRecordsRequest(StepsRecord::class, filter)).records else emptyList()
                 val sleep = if (HealthPermission.getReadPermission(SleepSessionRecord::class) in granted) client.readRecords(ReadRecordsRequest(SleepSessionRecord::class, filter)).records else emptyList()
@@ -811,52 +828,57 @@ class MainActivity : ComponentActivity() {
                 val oxygen = if (HealthPermission.getReadPermission(OxygenSaturationRecord::class) in granted) client.readRecords(ReadRecordsRequest(OxygenSaturationRecord::class, filter)).records else emptyList()
                 val weight = if (HealthPermission.getReadPermission(WeightRecord::class) in granted) client.readRecords(ReadRecordsRequest(WeightRecord::class, filter)).records else emptyList()
                 val nutrition = if (HealthPermission.getReadPermission(NutritionRecord::class) in granted) client.readRecords(ReadRecordsRequest(NutritionRecord::class, filter)).records else emptyList()
-                val sources = (steps.map { it.metadata.dataOrigin.packageName } + sleep.map { it.metadata.dataOrigin.packageName } + exercise.map { it.metadata.dataOrigin.packageName } + heart.map { it.metadata.dataOrigin.packageName } + hydration.map { it.metadata.dataOrigin.packageName } + distance.map { it.metadata.dataOrigin.packageName } + activeCalories.map { it.metadata.dataOrigin.packageName } + oxygen.map { it.metadata.dataOrigin.packageName } + weight.map { it.metadata.dataOrigin.packageName } + nutrition.map { it.metadata.dataOrigin.packageName }).filter { it.isNotBlank() }.distinct()
-                val last24h = TimeRangeFilter.between(now.minus(Duration.ofHours(24)), now)
-                val steps24 = if (steps.isNotEmpty()) client.readRecords(ReadRecordsRequest(StepsRecord::class, last24h)).records else emptyList()
-                val sleep24 = if (sleep.isNotEmpty()) client.readRecords(ReadRecordsRequest(SleepSessionRecord::class, last24h)).records else emptyList()
-                val exercise24 = if (exercise.isNotEmpty()) client.readRecords(ReadRecordsRequest(ExerciseSessionRecord::class, last24h)).records else emptyList()
-                val heart24 = if (heart.isNotEmpty()) client.readRecords(ReadRecordsRequest(HeartRateRecord::class, last24h)).records else emptyList()
-                val hydration24 = if (hydration.isNotEmpty()) client.readRecords(ReadRecordsRequest(HydrationRecord::class, last24h)).records else emptyList()
-                val distance24 = if (distance.isNotEmpty()) client.readRecords(ReadRecordsRequest(DistanceRecord::class, last24h)).records else emptyList()
-                val activeCalories24 = if (activeCalories.isNotEmpty()) client.readRecords(ReadRecordsRequest(ActiveCaloriesBurnedRecord::class, last24h)).records else emptyList()
-                val oxygen24 = if (oxygen.isNotEmpty()) client.readRecords(ReadRecordsRequest(OxygenSaturationRecord::class, last24h)).records else emptyList()
-                val nutrition24 = if (nutrition.isNotEmpty()) client.readRecords(ReadRecordsRequest(NutritionRecord::class, last24h)).records else emptyList()
+                val recentSources = (steps.map { it.metadata.dataOrigin.packageName } + sleep.map { it.metadata.dataOrigin.packageName } + exercise.map { it.metadata.dataOrigin.packageName } + heart.map { it.metadata.dataOrigin.packageName } + hydration.map { it.metadata.dataOrigin.packageName } + distance.map { it.metadata.dataOrigin.packageName } + activeCalories.map { it.metadata.dataOrigin.packageName } + oxygen.map { it.metadata.dataOrigin.packageName } + weight.map { it.metadata.dataOrigin.packageName } + nutrition.map { it.metadata.dataOrigin.packageName }).filter { it.isNotBlank() }.distinct()
+                val selectedDay = TimeRangeFilter.between(rangeStart, rangeEnd)
+                val stepsDay = if (HealthPermission.getReadPermission(StepsRecord::class) in granted) client.readRecords(ReadRecordsRequest(StepsRecord::class, selectedDay)).records else emptyList()
+                val sleepDay = if (HealthPermission.getReadPermission(SleepSessionRecord::class) in granted) client.readRecords(ReadRecordsRequest(SleepSessionRecord::class, selectedDay)).records else emptyList()
+                val exerciseDay = if (HealthPermission.getReadPermission(ExerciseSessionRecord::class) in granted) client.readRecords(ReadRecordsRequest(ExerciseSessionRecord::class, selectedDay)).records else emptyList()
+                val heartDay = if (HealthPermission.getReadPermission(HeartRateRecord::class) in granted) client.readRecords(ReadRecordsRequest(HeartRateRecord::class, selectedDay)).records else emptyList()
+                val hydrationDay = if (HealthPermission.getReadPermission(HydrationRecord::class) in granted) client.readRecords(ReadRecordsRequest(HydrationRecord::class, selectedDay)).records else emptyList()
+                val distanceDay = if (HealthPermission.getReadPermission(DistanceRecord::class) in granted) client.readRecords(ReadRecordsRequest(DistanceRecord::class, selectedDay)).records else emptyList()
+                val activeCaloriesDay = if (HealthPermission.getReadPermission(ActiveCaloriesBurnedRecord::class) in granted) client.readRecords(ReadRecordsRequest(ActiveCaloriesBurnedRecord::class, selectedDay)).records else emptyList()
+                val oxygenDay = if (HealthPermission.getReadPermission(OxygenSaturationRecord::class) in granted) client.readRecords(ReadRecordsRequest(OxygenSaturationRecord::class, selectedDay)).records else emptyList()
+                val weightDay = if (HealthPermission.getReadPermission(WeightRecord::class) in granted) client.readRecords(ReadRecordsRequest(WeightRecord::class, selectedDay)).records else emptyList()
+                val nutritionDay = if (HealthPermission.getReadPermission(NutritionRecord::class) in granted) client.readRecords(ReadRecordsRequest(NutritionRecord::class, selectedDay)).records else emptyList()
+                val sources = (recentSources + stepsDay.map { it.metadata.dataOrigin.packageName } + sleepDay.map { it.metadata.dataOrigin.packageName } + exerciseDay.map { it.metadata.dataOrigin.packageName } + heartDay.map { it.metadata.dataOrigin.packageName } + hydrationDay.map { it.metadata.dataOrigin.packageName } + distanceDay.map { it.metadata.dataOrigin.packageName } + activeCaloriesDay.map { it.metadata.dataOrigin.packageName } + oxygenDay.map { it.metadata.dataOrigin.packageName } + weightDay.map { it.metadata.dataOrigin.packageName } + nutritionDay.map { it.metadata.dataOrigin.packageName }).filter { it.isNotBlank() }.distinct()
                 val attributions = JSONObject().apply {
-                    put("steps", attribution(steps24.map { it.metadata.dataOrigin.packageName to it.endTime }))
-                    put("sleepMinutes", attribution(sleep24.map { it.metadata.dataOrigin.packageName to it.endTime }))
-                    put("exerciseMinutes", attribution(exercise24.map { it.metadata.dataOrigin.packageName to it.endTime }))
-                    put("averageHeartRate", attribution(heart24.map { it.metadata.dataOrigin.packageName to it.endTime }))
-                    put("hydrationLitres", attribution(hydration24.map { it.metadata.dataOrigin.packageName to it.endTime }))
-                    put("distanceKm", attribution(distance24.map { it.metadata.dataOrigin.packageName to it.endTime }))
-                    put("activeCalories", attribution(activeCalories24.map { it.metadata.dataOrigin.packageName to it.endTime }))
-                    put("oxygenPercent", attribution(oxygen24.map { it.metadata.dataOrigin.packageName to it.time }))
-                    put("weightKg", attribution(weight.map { it.metadata.dataOrigin.packageName to it.time }))
-                    put("nutrition", attribution(nutrition24.map { it.metadata.dataOrigin.packageName to it.endTime }))
+                    put("steps", attribution(stepsDay.map { it.metadata.dataOrigin.packageName to it.endTime }))
+                    put("sleepMinutes", attribution(sleepDay.map { it.metadata.dataOrigin.packageName to it.endTime }))
+                    put("exerciseMinutes", attribution(exerciseDay.map { it.metadata.dataOrigin.packageName to it.endTime }))
+                    put("averageHeartRate", attribution(heartDay.map { it.metadata.dataOrigin.packageName to it.endTime }))
+                    put("hydrationLitres", attribution(hydrationDay.map { it.metadata.dataOrigin.packageName to it.endTime }))
+                    put("distanceKm", attribution(distanceDay.map { it.metadata.dataOrigin.packageName to it.endTime }))
+                    put("activeCalories", attribution(activeCaloriesDay.map { it.metadata.dataOrigin.packageName to it.endTime }))
+                    put("oxygenPercent", attribution(oxygenDay.map { it.metadata.dataOrigin.packageName to it.time }))
+                    put("weightKg", attribution(weightDay.map { it.metadata.dataOrigin.packageName to it.time }))
+                    put("nutrition", attribution(nutritionDay.map { it.metadata.dataOrigin.packageName to it.endTime }))
                 }
-                val samples = heart24.flatMap { it.samples }
+                val samples = heartDay.flatMap { it.samples }
                 val averageHeartRate = if (samples.isEmpty()) null else samples.map { it.beatsPerMinute }.average().roundToInt()
-                val nutritionSummary = buildNutritionSummary(nutrition24)
-                val details = buildDetailsPayload(steps, sleep, exercise, heart, hydration, distance, activeCalories, oxygen, weight, nutrition)
+                val nutritionSummary = buildNutritionSummary(nutritionDay)
+                val details = buildDetailsPayload(stepsDay, sleepDay, exerciseDay, heartDay, hydrationDay, distanceDay, activeCaloriesDay, oxygenDay, weightDay, nutritionDay)
                 val scoreBreakdown = buildScoreBreakdown(
-                    steps24.sumOf { it.count },
-                    sleep24.sumOf { Duration.between(it.startTime, it.endTime).toMinutes() },
-                    exercise24.sumOf { Duration.between(it.startTime, it.endTime).toMinutes() },
-                    hydration24.sumOf { it.volume.inLiters },
+                    stepsDay.sumOf { it.count },
+                    sleepDay.sumOf { Duration.between(it.startTime, it.endTime).toMinutes() },
+                    exerciseDay.sumOf { Duration.between(it.startTime, it.endTime).toMinutes() },
+                    hydrationDay.sumOf { it.volume.inLiters },
                     averageHeartRate,
                     nutritionSummary
                 )
                 val payload = JSONObject().apply {
                     put("periodHours", 24)
-                    put("steps", steps24.sumOf { it.count })
-                    put("sleepMinutes", sleep24.sumOf { Duration.between(it.startTime, it.endTime).toMinutes() })
-                    put("exerciseMinutes", exercise24.sumOf { Duration.between(it.startTime, it.endTime).toMinutes() })
+                    put("selectedDate", selectedDate.toString())
+                    put("rangeStart", rangeStart.toString())
+                    put("rangeEnd", rangeEnd.toString())
+                    put("steps", stepsDay.sumOf { it.count })
+                    put("sleepMinutes", sleepDay.sumOf { Duration.between(it.startTime, it.endTime).toMinutes() })
+                    put("exerciseMinutes", exerciseDay.sumOf { Duration.between(it.startTime, it.endTime).toMinutes() })
                     put("averageHeartRate", averageHeartRate ?: JSONObject.NULL)
-                    put("hydrationLitres", hydration24.sumOf { it.volume.inLiters })
-                    put("distanceKm", distance24.sumOf { it.distance.inKilometers })
-                    put("activeCalories", activeCalories24.sumOf { it.energy.inKilocalories })
-                    put("oxygenPercent", oxygen24.maxByOrNull { it.time }?.percentage?.value ?: JSONObject.NULL)
-                    put("weightKg", weight.maxByOrNull { it.time }?.weight?.inKilograms ?: JSONObject.NULL)
+                    put("hydrationLitres", hydrationDay.sumOf { it.volume.inLiters })
+                    put("distanceKm", distanceDay.sumOf { it.distance.inKilometers })
+                    put("activeCalories", activeCaloriesDay.sumOf { it.energy.inKilocalories })
+                    put("oxygenPercent", oxygenDay.maxByOrNull { it.time }?.percentage?.value ?: JSONObject.NULL)
+                    put("weightKg", weightDay.maxByOrNull { it.time }?.weight?.inKilograms ?: JSONObject.NULL)
                     put("nutrition", nutritionSummary)
                     put("details", details)
                     put("score", scoreBreakdown.getInt("overall"))
