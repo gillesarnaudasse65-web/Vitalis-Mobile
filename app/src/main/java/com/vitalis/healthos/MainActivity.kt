@@ -7,6 +7,8 @@ import android.content.Intent
 import android.graphics.Color
 import android.net.Uri
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.view.Gravity
 import android.view.ViewGroup
 import android.webkit.JavascriptInterface
@@ -14,6 +16,7 @@ import android.webkit.ValueCallback
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
+import android.webkit.WebResourceResponse
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.Button
@@ -59,6 +62,8 @@ class MainActivity : ComponentActivity() {
     private lateinit var root: LinearLayout
     private lateinit var assetLoader: WebViewAssetLoader
     private var filePathCallback: ValueCallback<Array<Uri>>? = null
+    private var fallbackLoaded = false
+    private var remotePageFinished = false
     private var healthConnectClient: HealthConnectClient? = null
 
     private val healthPermissions = setOf(
@@ -173,6 +178,10 @@ class MainActivity : ComponentActivity() {
 
                 override fun onPageFinished(view: WebView, url: String) {
                     loading.visibility = android.view.View.GONE
+                    if (requestHost(url) == VITALIS_HOST) {
+                        remotePageFinished = true
+                        injectClassicCompatibility(view)
+                    }
                     view.evaluateJavascript(
                         "window.dispatchEvent(new CustomEvent('vitalis-native-ready',{detail:{platform:'android',version:'3.5'}}));",
                         null
@@ -181,19 +190,52 @@ class MainActivity : ComponentActivity() {
                 }
 
                 override fun onReceivedError(view: WebView, request: WebResourceRequest, error: WebResourceError) {
-                    if (request.isForMainFrame && request.url.host == LOCAL_ASSET_HOST) showConnectionError()
+                    if (!request.isForMainFrame) return
+                    if (request.url.host == VITALIS_HOST) loadOfflineFallback()
+                    else if (request.url.host == LOCAL_ASSET_HOST) showConnectionError()
+                }
+
+                override fun onReceivedHttpError(
+                    view: WebView,
+                    request: WebResourceRequest,
+                    errorResponse: WebResourceResponse
+                ) {
+                    if (request.isForMainFrame && request.url.host == VITALIS_HOST && errorResponse.statusCode >= 400) {
+                        loadOfflineFallback()
+                    }
                 }
             }
-            loadUrl(LOCAL_URL)
+            loadUrl(VITALIS_URL)
         }
         root.addView(webView, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
         setContentView(root)
+
+        Handler(Looper.getMainLooper()).postDelayed({
+            if (!remotePageFinished && !fallbackLoaded && ::webView.isInitialized) loadOfflineFallback()
+        }, REMOTE_LOAD_TIMEOUT_MS)
 
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
                 if (webView.canGoBack()) webView.goBack() else finish()
             }
         })
+    }
+
+    private fun requestHost(url: String): String? = runCatching { Uri.parse(url).host }.getOrNull()
+
+    private fun injectClassicCompatibility(view: WebView) {
+        val script = runCatching {
+            assets.open("vitalis/compat.js").bufferedReader().use { it.readText() }
+        }.getOrNull() ?: return
+        view.evaluateJavascript(script, null)
+    }
+
+    private fun loadOfflineFallback() {
+        if (fallbackLoaded || !::webView.isInitialized) return
+        fallbackLoaded = true
+        loading.visibility = android.view.View.GONE
+        webView.stopLoading()
+        webView.loadUrl(LOCAL_URL)
     }
 
     override fun onDestroy() {
@@ -245,6 +287,21 @@ class MainActivity : ComponentActivity() {
 
         @JavascriptInterface
         fun getConnectorStatus(): String = buildConnectorPayload(emptyList()).toString()
+
+        @JavascriptInterface
+        fun openOfflineMode() {
+            runOnUiThread { loadOfflineFallback() }
+        }
+
+        @JavascriptInterface
+        fun openClassicInterface() {
+            runOnUiThread {
+                fallbackLoaded = false
+                remotePageFinished = false
+                loading.visibility = android.view.View.VISIBLE
+                webView.loadUrl(VITALIS_URL)
+            }
+        }
 
         @JavascriptInterface
         fun openHealthConnectSettings() {
@@ -431,5 +488,7 @@ class MainActivity : ComponentActivity() {
         private const val LOCAL_ASSET_HOST = "appassets.androidplatform.net"
         private const val LOCAL_URL = "https://$LOCAL_ASSET_HOST/assets/vitalis/index.html"
         private const val VITALIS_HOST = "vitalis-health-os.gillesarnaudasse65.chatgpt.site"
+        private const val VITALIS_URL = "https://$VITALIS_HOST/"
+        private const val REMOTE_LOAD_TIMEOUT_MS = 12_000L
     }
 }
