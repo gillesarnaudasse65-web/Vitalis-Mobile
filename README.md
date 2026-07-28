@@ -1,22 +1,32 @@
 # Vitalis Mobile Native — Android
 
-Application Android native Vitalis Health OS avec interface classique, passerelle Health Connect et continuité hors ligne.
+Application Android Vitalis Health OS avec interface classique, passerelle Health Connect, traçabilité des sources et continuité hors ligne.
 
-## Vitalis 3.6 — interface classique hybride
+## Vitalis 3.7 — connecteurs, sources et voix
 
-- L’ancienne interface Vitalis en ligne redevient l’interface principale.
-- Les fonctions natives Android sont injectées derrière l’interface sans modifier son apparence.
-- Le scanner de repas ouvre réellement la caméra ou la galerie.
-- L’enregistrement d’activité, l’hydratation et les mesures disposent d’un formulaire fonctionnel.
-- Le bouton Health Connect ouvre les autorisations système Android.
-- Si le site ne répond pas, l’application bascule automatiquement sur le tableau de bord local.
-- Depuis le mode local, un bouton permet de réessayer l’interface classique.
-- Les données Health Connect et les saisies manuelles restent disponibles dans leurs contextes respectifs.
+- L’interface classique reste l’interface principale.
+- Les sources Health Connect sont découvertes dynamiquement, sans liste ni nombre maximum codé dans Vitalis.
+- Chaque donnée synchronisée indique le dernier connecteur, son package, l’heure de la dernière mesure et tous les contributeurs détectés.
+- Un bouton **Actualiser** relance la lecture Health Connect et ouvre le rapport détaillé des données et sources.
+- Le bouton **Voix** utilise le moteur vocal Android natif avec une vitesse et une tonalité stabilisées.
+- Le bouton **Micro** active ou coupe explicitement le microphone. Le microphone est désactivé par défaut.
+- La reconnaissance vocale transmet les résultats partiels et définitifs à l’interface et au coach.
+- Le scanner de repas, l’activité, l’hydratation et les mesures manuelles restent opérationnels.
+- Si le site ne répond pas, Vitalis bascule sur le tableau de bord local avec les mêmes commandes natives.
+
+## Fonctionnement réel des connecteurs
+
+Vitalis n’impose aucune limite au nombre de sources détectées. Toute application qui écrit des données autorisées dans Health Connect peut apparaître automatiquement.
+
+Samsung Health, Google Fit, Mibro Fit, Fitbit et d’autres services peuvent fonctionner lorsqu’ils publient effectivement leurs données dans Health Connect. Un fournisseur qui ne prend pas en charge Health Connect nécessite obligatoirement son API officielle et son autorisation OAuth ; une application Android ne peut pas contourner cette restriction fournisseur.
+
+## Confidentialité vocale
+
+- L’autorisation microphone est demandée uniquement lors de la première activation.
+- Le micro reste coupé au démarrage.
+- Le bouton rouge **Couper micro** arrête immédiatement l’écoute.
+- La voix de lecture peut être arrêtée avec le même bouton **Voix**.
 - Aucune clé API n’est intégrée dans l’APK.
-
-## Sources santé
-
-Vitalis peut recevoir les données autorisées de Samsung Health, Google Fit, Mibro Fit, Fitbit et d’autres applications lorsqu’elles publient dans Health Connect. Les fournisseurs qui n’utilisent pas Health Connect nécessitent toujours leur API officielle ou une autorisation OAuth.
 
 ## Télécharger l’APK
 
@@ -27,11 +37,3 @@ Vitalis peut recevoir les données autorisées de Samsung Health, Google Fit, Mi
 5. Décompresser le ZIP puis installer `app-debug.apk`.
 
 Une compilation est lancée automatiquement à chaque mise à jour de `main`.
-
-## Utilisation
-
-1. Ouvrir Vitalis : l’interface classique se charge en priorité.
-2. Aller dans les sources santé et appuyer sur **Autoriser dans Health Connect**.
-3. Autoriser les catégories souhaitées.
-4. Utiliser les actions rapides depuis le tableau de bord.
-5. En cas de panne réseau ou du site, utiliser le mode local puis **Réessayer l’interface classique**.
