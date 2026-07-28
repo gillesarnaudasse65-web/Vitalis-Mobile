@@ -1,6 +1,7 @@
 package com.vitalis.healthos
 
 import android.annotation.SuppressLint
+import android.app.Activity
 import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.graphics.Color
@@ -82,7 +83,7 @@ class MainActivity : ComponentActivity() {
     private val fileChooserLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) { result ->
-        val selected = if (result.resultCode == RESULT_OK) {
+        val selected = if (result.resultCode == Activity.RESULT_OK) {
             val data = result.data
             when {
                 data?.clipData != null -> Array(data.clipData!!.itemCount) { index ->
@@ -145,7 +146,7 @@ class MainActivity : ComponentActivity() {
                 override fun onShowFileChooser(
                     webView: WebView,
                     callback: ValueCallback<Array<Uri>>,
-                    params: FileChooserParams
+                    params: WebChromeClient.FileChooserParams
                 ): Boolean {
                     filePathCallback?.onReceiveValue(null)
                     filePathCallback = callback
