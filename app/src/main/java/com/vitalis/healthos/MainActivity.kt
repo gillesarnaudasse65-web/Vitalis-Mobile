@@ -797,7 +797,7 @@ class MainActivity : ComponentActivity() {
                     put("sleepMinutes", attribution(sleep24.map { it.metadata.dataOrigin.packageName to it.endTime }))
                     put("exerciseMinutes", attribution(exercise24.map { it.metadata.dataOrigin.packageName to it.endTime }))
                     put("averageHeartRate", attribution(heart24.map { it.metadata.dataOrigin.packageName to it.endTime }))
-                    put("hydrationLitres", attribution(hydration24.map { it.metadata.dataOrigin.packageName to it.time }))
+                    put("hydrationLitres", attribution(hydration24.map { it.metadata.dataOrigin.packageName to it.endTime }))
                     put("distanceKm", attribution(distance24.map { it.metadata.dataOrigin.packageName to it.endTime }))
                     put("activeCalories", attribution(activeCalories24.map { it.metadata.dataOrigin.packageName to it.endTime }))
                     put("oxygenPercent", attribution(oxygen24.map { it.metadata.dataOrigin.packageName to it.time }))
@@ -922,10 +922,10 @@ class MainActivity : ComponentActivity() {
                 put("connector", sourceLabel(record.metadata.dataOrigin.packageName))
             }
         }))
-        put("hydration", JSONArray(hydration.sortedByDescending { it.time }.take(50).map { record ->
+        put("hydration", JSONArray(hydration.sortedByDescending { it.endTime }.take(50).map { record ->
             JSONObject().apply {
                 put("litres", record.volume.inLiters)
-                put("time", record.time.toString())
+                put("time", record.endTime.toString())
                 put("connector", sourceLabel(record.metadata.dataOrigin.packageName))
             }
         }))
