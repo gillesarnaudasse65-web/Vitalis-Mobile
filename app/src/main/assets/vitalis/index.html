@@ -31,7 +31,8 @@ nav{position:fixed;z-index:30;left:10px;right:10px;bottom:calc(8px + env(safe-ar
  <div class="hero"><h1 id="greeting">Bonsoir Gilles</h1><p id="today"></p><div class="score-row"><div class="score"><strong id="healthScore">76</strong></div><div class="score-copy"><b>Score Vitalis</b><span id="scoreText">Bonne dynamique. Continuez ainsi.</span></div></div></div>
 </header>
 <main>
- <div id="offlineBanner" class="banner hidden">Mode hors ligne actif : vos données restent disponibles. Les fonctions IA en ligne reprendront automatiquement avec Internet.</div>
+ <div id="classicFallbackBanner" class="banner">L’interface classique est temporairement indisponible. Vos fonctions essentielles restent actives hors ligne. <button id="retryClassic" style="display:block;margin-top:9px;border:0;border-radius:10px;padding:9px 12px;background:#063c30;color:#fff">Réessayer l’interface classique</button></div>
+ <div id="offlineBanner" class="banner hidden">Mode hors ligne actif : vos données restent disponibles. Les fonctions en ligne reprendront avec Internet.</div>
  <section id="dashboard" class="page active">
   <div class="section-title"><h2>Aujourd’hui</h2><span id="lastSync">Données locales</span></div>
   <div class="grid">
@@ -159,6 +160,7 @@ nav{position:fixed;z-index:30;left:10px;right:10px;bottom:calc(8px + env(safe-ar
  document.querySelectorAll("[data-page]").forEach(function(b){b.onclick=function(){setPage(this.dataset.page);};});
  document.querySelectorAll("[data-action]").forEach(function(b){b.onclick=function(){openModal(this.dataset.action);};});
  document.getElementById("closeModal").onclick=closeModal;document.getElementById("modal").onclick=function(e){if(e.target===this)closeModal();};
+ document.getElementById("retryClassic").onclick=function(){if(native()&&native().openClassicInterface)native().openClassicInterface();else location.reload();};
  document.getElementById("authorizeHealth").onclick=function(){if(native()&&native().requestHealthConnectPermissions)native().requestHealthConnectPermissions();else alert("Health Connect est disponible dans l’application Android Vitalis.");};
  document.getElementById("refreshHealth").onclick=function(){if(native()&&native().refreshHealthData)native().refreshHealthData();else render();};
  document.getElementById("coachRefresh").onclick=function(){render();document.getElementById("coachMessage").textContent=coach().message;};
