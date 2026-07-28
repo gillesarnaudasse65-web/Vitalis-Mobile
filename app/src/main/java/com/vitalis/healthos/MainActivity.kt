@@ -9,6 +9,8 @@ import android.os.Bundle
 import android.view.Gravity
 import android.view.ViewGroup
 import android.webkit.JavascriptInterface
+import android.webkit.ValueCallback
+import android.webkit.WebChromeClient
 import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
 import android.webkit.WebView
@@ -19,6 +21,7 @@ import android.widget.ProgressBar
 import android.widget.TextView
 import androidx.activity.ComponentActivity
 import androidx.activity.OnBackPressedCallback
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.health.connect.client.HealthConnectClient
 import androidx.health.connect.client.PermissionController
 import androidx.health.connect.client.permission.HealthPermission
@@ -54,6 +57,7 @@ class MainActivity : ComponentActivity() {
     private lateinit var loading: ProgressBar
     private lateinit var root: LinearLayout
     private lateinit var assetLoader: WebViewAssetLoader
+    private var filePathCallback: ValueCallback<Array<Uri>>? = null
     private var healthConnectClient: HealthConnectClient? = null
 
     private val healthPermissions = setOf(
@@ -74,6 +78,23 @@ class MainActivity : ComponentActivity() {
         HealthPermission.getReadPermission(NutritionRecord::class),
         HealthPermission.getReadPermission(HydrationRecord::class)
     )
+
+    private val fileChooserLauncher = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        val selected = if (result.resultCode == RESULT_OK) {
+            val data = result.data
+            when {
+                data?.clipData != null -> Array(data.clipData!!.itemCount) { index ->
+                    data.clipData!!.getItemAt(index).uri
+                }
+                data?.data != null -> arrayOf(data.data!!)
+                else -> emptyArray()
+            }
+        } else emptyArray()
+        filePathCallback?.onReceiveValue(selected)
+        filePathCallback = null
+    }
 
     private val permissionLauncher = registerForActivityResult(
         PermissionController.createRequestPermissionResultContract()
@@ -120,6 +141,23 @@ class MainActivity : ComponentActivity() {
             settings.userAgentString = settings.userAgentString + " VitalisAndroid/3.5"
             WebView.setWebContentsDebuggingEnabled(BuildConfig.DEBUG)
             addJavascriptInterface(VitalisAndroidBridge(), "VitalisAndroid")
+            webChromeClient = object : WebChromeClient() {
+                override fun onShowFileChooser(
+                    webView: WebView,
+                    callback: ValueCallback<Array<Uri>>,
+                    params: FileChooserParams
+                ): Boolean {
+                    filePathCallback?.onReceiveValue(null)
+                    filePathCallback = callback
+                    return runCatching {
+                        fileChooserLauncher.launch(params.createIntent())
+                        true
+                    }.getOrElse {
+                        filePathCallback = null
+                        false
+                    }
+                }
+            }
             webViewClient = object : WebViewClient() {
                 override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest) =
                     assetLoader.shouldInterceptRequest(request.url)
@@ -155,6 +193,13 @@ class MainActivity : ComponentActivity() {
                 if (webView.canGoBack()) webView.goBack() else finish()
             }
         })
+    }
+
+    override fun onDestroy() {
+        filePathCallback?.onReceiveValue(null)
+        filePathCallback = null
+        if (::webView.isInitialized) webView.destroy()
+        super.onDestroy()
     }
 
     private fun showConnectionError() {
