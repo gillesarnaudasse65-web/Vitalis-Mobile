@@ -111,7 +111,7 @@ class MainActivity : ComponentActivity() {
             settings.allowContentAccess = false
             settings.mediaPlaybackRequiresUserGesture = false
             settings.mixedContentMode = android.webkit.WebSettings.MIXED_CONTENT_NEVER_ALLOW
-            settings.userAgentString = settings.userAgentString + " VitalisAndroid/3.2"
+            settings.userAgentString = settings.userAgentString + " VitalisAndroid/3.3"
             WebView.setWebContentsDebuggingEnabled(BuildConfig.DEBUG)
             addJavascriptInterface(VitalisAndroidBridge(), "VitalisAndroid")
             webViewClient = object : WebViewClient() {
@@ -126,7 +126,7 @@ class MainActivity : ComponentActivity() {
                 override fun onPageFinished(view: WebView, url: String) {
                     loading.visibility = android.view.View.GONE
                     view.evaluateJavascript(
-                        "window.dispatchEvent(new CustomEvent('vitalis-native-ready',{detail:{platform:'android',version:'3.2'}}));",
+                        "window.dispatchEvent(new CustomEvent('vitalis-native-ready',{detail:{platform:'android',version:'3.3'}}));",
                         null
                     )
                     readHealthData()
@@ -189,6 +189,9 @@ class MainActivity : ComponentActivity() {
         }
 
         @JavascriptInterface
+        fun getConnectorStatus(): String = buildConnectorPayload(emptyList()).toString()
+
+        @JavascriptInterface
         fun openHealthConnectSettings() {
             runOnUiThread {
                 try { startActivity(Intent(HealthConnectClient.ACTION_HEALTH_CONNECT_SETTINGS)) }
@@ -203,14 +206,21 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun readHealthData() {
-        val client = healthConnectClient ?: return
+        val client = healthConnectClient
+        if (client == null) {
+            dispatchConnectorStatus(emptyList())
+            return
+        }
         lifecycleScope.launch {
             val granted = client.permissionController.getGrantedPermissions()
-            if (granted.intersect(healthPermissions).isEmpty()) return@launch
+            if (granted.intersect(healthPermissions).isEmpty()) {
+                dispatchConnectorStatus(emptyList())
+                return@launch
+            }
 
             runCatching {
                 val now = Instant.now()
-                val filter = TimeRangeFilter.between(now.minus(Duration.ofHours(24)), now)
+                val filter = TimeRangeFilter.between(now.minus(Duration.ofDays(30)), now)
                 val steps = client.readRecords(ReadRecordsRequest(StepsRecord::class, filter)).records
                 val sleep = client.readRecords(ReadRecordsRequest(SleepSessionRecord::class, filter)).records
                 val exercise = client.readRecords(ReadRecordsRequest(ExerciseSessionRecord::class, filter)).records
@@ -223,21 +233,79 @@ class MainActivity : ComponentActivity() {
                     heart.map { it.metadata.dataOrigin.packageName } +
                     hydration.map { it.metadata.dataOrigin.packageName }).distinct()
 
+                val last24h = TimeRangeFilter.between(now.minus(Duration.ofHours(24)), now)
+                val steps24 = client.readRecords(ReadRecordsRequest(StepsRecord::class, last24h)).records
+                val sleep24 = client.readRecords(ReadRecordsRequest(SleepSessionRecord::class, last24h)).records
+                val exercise24 = client.readRecords(ReadRecordsRequest(ExerciseSessionRecord::class, last24h)).records
+                val heart24 = client.readRecords(ReadRecordsRequest(HeartRateRecord::class, last24h)).records
+                val hydration24 = client.readRecords(ReadRecordsRequest(HydrationRecord::class, last24h)).records
+
                 val payload = JSONObject().apply {
                     put("periodHours", 24)
-                    put("steps", steps.sumOf { it.count })
-                    put("sleepMinutes", sleep.sumOf { Duration.between(it.startTime, it.endTime).toMinutes() })
-                    put("exerciseMinutes", exercise.sumOf { Duration.between(it.startTime, it.endTime).toMinutes() })
-                    val samples = heart.flatMap { it.samples }
+                    put("steps", steps24.sumOf { it.count })
+                    put("sleepMinutes", sleep24.sumOf { Duration.between(it.startTime, it.endTime).toMinutes() })
+                    put("exerciseMinutes", exercise24.sumOf { Duration.between(it.startTime, it.endTime).toMinutes() })
+                    val samples = heart24.flatMap { it.samples }
                     put("averageHeartRate", if (samples.isEmpty()) JSONObject.NULL else samples.map { it.beatsPerMinute }.average().roundToInt())
-                    put("hydrationLitres", hydration.sumOf { it.volume.inLiters })
+                    put("hydrationLitres", hydration24.sumOf { it.volume.inLiters })
                     put("sources", JSONArray(sources))
                     put("syncedAt", now.toString())
                 }
                 dispatchHealthData(payload)
+                dispatchConnectorStatus(sources)
             }.onFailure { error ->
                 notifyWeb(false, "sync_error", error.message ?: "Synchronisation impossible")
             }
+        }
+    }
+
+    private fun buildConnectorPayload(sourcePackages: List<String>): JSONObject {
+        fun statusFor(vararg markers: String): String =
+            if (sourcePackages.any { pkg -> markers.any { marker -> pkg.contains(marker, ignoreCase = true) } }) "connected"
+            else "available_via_health_connect"
+
+        val healthStatus = when (HealthConnectClient.getSdkStatus(this)) {
+            HealthConnectClient.SDK_AVAILABLE -> "available"
+            HealthConnectClient.SDK_UNAVAILABLE_PROVIDER_UPDATE_REQUIRED -> "update_required"
+            else -> "unavailable"
+        }
+
+        return JSONObject().apply {
+            put("healthConnect", healthStatus)
+            put("connectors", JSONArray().apply {
+                put(connector("Samsung Health", statusFor("samsung", "shealth"), "health_connect"))
+                put(connector("Mibro Fit", statusFor("mibro", "zhencheng"), "health_connect"))
+                put(connector("Google Fit", statusFor("google.android.apps.fitness", "googlefit"), "health_connect"))
+                put(connector("Fitbit", statusFor("fitbit"), "health_connect"))
+                put(connector("Garmin", statusFor("garmin"), "health_connect_or_oauth"))
+                put(connector("Huawei Health", statusFor("huawei", "healthapp"), "health_connect"))
+                put(connector("Strava", statusFor("strava"), "health_connect_or_oauth"))
+                put(connector("Oura", statusFor("oura"), "health_connect_or_oauth"))
+                put(connector("WHOOP", statusFor("whoop"), "oauth_required"))
+                put(connector("Withings", statusFor("withings"), "health_connect_or_oauth"))
+                put(connector("FitOn", statusFor("fiton"), "health_connect_if_supported"))
+                put(connector("Fitify", statusFor("fitify"), "health_connect_if_supported"))
+                put(connector("FitCoach", statusFor("fitcoach"), "health_connect_if_supported"))
+                put(connector("FlexMe", statusFor("flexme"), "provider_api_required"))
+                put(connector("Welmi", statusFor("welmi"), "provider_api_required"))
+            })
+            put("sourcePackages", JSONArray(sourcePackages))
+        }
+    }
+
+    private fun connector(name: String, status: String, mode: String) = JSONObject().apply {
+        put("name", name)
+        put("status", status)
+        put("mode", mode)
+    }
+
+    private fun dispatchConnectorStatus(sources: List<String>) {
+        val payload = buildConnectorPayload(sources)
+        runOnUiThread {
+            webView.evaluateJavascript(
+                "window.dispatchEvent(new CustomEvent('vitalis-connectors',{detail:$payload}));",
+                null
+            )
         }
     }
 
