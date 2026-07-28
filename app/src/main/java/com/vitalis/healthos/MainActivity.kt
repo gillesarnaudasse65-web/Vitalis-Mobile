@@ -16,6 +16,9 @@ import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
+import android.security.keystore.KeyGenParameterSpec
+import android.security.keystore.KeyProperties
+import android.util.Base64
 import android.view.Gravity
 import android.view.ViewGroup
 import android.webkit.JavascriptInterface
@@ -60,9 +63,19 @@ import androidx.webkit.WebViewAssetLoader
 import kotlinx.coroutines.launch
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.BufferedReader
+import java.io.InputStreamReader
+import java.net.HttpURLConnection
+import java.net.URL
+import java.nio.charset.StandardCharsets
+import java.security.KeyStore
 import java.time.Duration
 import java.time.Instant
 import java.util.Locale
+import javax.crypto.Cipher
+import javax.crypto.KeyGenerator
+import javax.crypto.SecretKey
+import javax.crypto.spec.GCMParameterSpec
 import kotlin.math.roundToInt
 
 class MainActivity : ComponentActivity() {
@@ -167,7 +180,7 @@ class MainActivity : ComponentActivity() {
             settings.allowContentAccess = false
             settings.mediaPlaybackRequiresUserGesture = false
             settings.mixedContentMode = android.webkit.WebSettings.MIXED_CONTENT_NEVER_ALLOW
-            settings.userAgentString = settings.userAgentString + " VitalisAndroid/3.8"
+            settings.userAgentString = settings.userAgentString + " VitalisAndroid/3.9"
             WebView.setWebContentsDebuggingEnabled(BuildConfig.DEBUG)
             addJavascriptInterface(VitalisAndroidBridge(), "VitalisAndroid")
             webChromeClient = object : WebChromeClient() {
@@ -205,7 +218,7 @@ class MainActivity : ComponentActivity() {
                     if (host == VITALIS_HOST) remotePageFinished = true
                     if (host == VITALIS_HOST || host == LOCAL_ASSET_HOST) injectClassicCompatibility(view)
                     view.evaluateJavascript(
-                        "window.dispatchEvent(new CustomEvent('vitalis-native-ready',{detail:{platform:'android',version:'3.8'}}));",
+                        "window.dispatchEvent(new CustomEvent('vitalis-native-ready',{detail:{platform:'android',version:'3.9'}}));",
                         null
                     )
                     readHealthData()
@@ -318,6 +331,53 @@ class MainActivity : ComponentActivity() {
 
         @JavascriptInterface
         fun getLastHealthData(): String = lastHealthPayload.toString()
+
+        @JavascriptInterface
+        fun hasOpenAiKey(): Boolean = readOpenAiKey() != null
+
+        @JavascriptInterface
+        fun saveOpenAiKey(apiKey: String): Boolean {
+            val cleanKey = apiKey.trim()
+            if (!cleanKey.startsWith("sk-") || cleanKey.length < 30) return false
+            return runCatching {
+                writeEncryptedSecret(OPENAI_SECRET_NAME, cleanKey)
+                true
+            }.getOrDefault(false)
+        }
+
+        @JavascriptInterface
+        fun clearOpenAiKey() {
+            getSharedPreferences(SECURE_PREFS, MODE_PRIVATE)
+                .edit()
+                .remove(OPENAI_SECRET_NAME)
+                .apply()
+        }
+
+        @JavascriptInterface
+        fun hasAiHealthConsent(): Boolean =
+            getSharedPreferences(APP_PREFS, MODE_PRIVATE).getBoolean(AI_HEALTH_CONSENT, false)
+
+        @JavascriptInterface
+        fun setAiHealthConsent(consented: Boolean) {
+            getSharedPreferences(APP_PREFS, MODE_PRIVATE)
+                .edit()
+                .putBoolean(AI_HEALTH_CONSENT, consented)
+                .apply()
+        }
+
+        @JavascriptInterface
+        fun askKofi(prompt: String, requestId: String) {
+            requestKofi(prompt, requestId, null)
+        }
+
+        @JavascriptInterface
+        fun analyzeMealImage(imageDataUrl: String, requestId: String) {
+            requestKofi(
+                "Analyse cette photo de repas. Estime prudemment les aliments, calories, glucides, protéines, lipides, fibres, sucre et sodium. Signale clairement les incertitudes et propose une amélioration simple.",
+                requestId,
+                imageDataUrl
+            )
+        }
 
         @JavascriptInterface
         fun speakText(text: String, language: String?) {
@@ -515,6 +575,181 @@ class MainActivity : ComponentActivity() {
         if (!::webView.isInitialized) return
         runOnUiThread {
             webView.evaluateJavascript("window.dispatchEvent(new CustomEvent('${name}',{detail:$payload}));", null)
+        }
+    }
+
+    private fun requestKofi(prompt: String, requestId: String, imageDataUrl: String?) {
+        val cleanPrompt = prompt.trim().take(MAX_AI_PROMPT_LENGTH)
+        if (cleanPrompt.isEmpty()) {
+            dispatchAiResponse(requestId, false, "", "Question vide.")
+            return
+        }
+        val apiKey = readOpenAiKey()
+        if (apiKey == null) {
+            dispatchAiResponse(requestId, false, "", "Clé OpenAI non configurée.")
+            return
+        }
+        val consented = getSharedPreferences(APP_PREFS, MODE_PRIVATE)
+            .getBoolean(AI_HEALTH_CONSENT, false)
+        if (!consented) {
+            dispatchAiResponse(requestId, false, "", "Consentement requis avant l’analyse des données santé.")
+            return
+        }
+        val healthSnapshot = sanitizedHealthContext()
+        lifecycleScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            runCatching {
+                val inputContent = JSONArray().apply {
+                    put(JSONObject().apply {
+                        put("type", "input_text")
+                        put(
+                            "text",
+                            "Question de l’utilisateur : $cleanPrompt\n\n" +
+                                "Données Vitalis disponibles (peuvent être incomplètes) : $healthSnapshot"
+                        )
+                    })
+                    if (!imageDataUrl.isNullOrBlank() && imageDataUrl.startsWith("data:image/")) {
+                        put(JSONObject().apply {
+                            put("type", "input_image")
+                            put("image_url", imageDataUrl.take(MAX_IMAGE_DATA_URL_LENGTH))
+                            put("detail", "low")
+                        })
+                    }
+                }
+                val body = JSONObject().apply {
+                    put("model", OPENAI_MODEL)
+                    put("max_output_tokens", 900)
+                    put("store", false)
+                    put("instructions", KOFI_INSTRUCTIONS)
+                    put("input", JSONArray().put(JSONObject().apply {
+                        put("role", "user")
+                        put("content", inputContent)
+                    }))
+                }
+                val response = postOpenAi(apiKey, body)
+                extractResponseText(response)
+            }.onSuccess { answer ->
+                dispatchAiResponse(requestId, true, answer, null)
+            }.onFailure { error ->
+                dispatchAiResponse(
+                    requestId,
+                    false,
+                    "",
+                    error.message?.take(300) ?: "Le service IA est momentanément indisponible."
+                )
+            }
+        }
+    }
+
+    private fun postOpenAi(apiKey: String, body: JSONObject): JSONObject {
+        val connection = (URL(OPENAI_RESPONSES_URL).openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            connectTimeout = 20_000
+            readTimeout = 75_000
+            doOutput = true
+            setRequestProperty("Authorization", "Bearer $apiKey")
+            setRequestProperty("Content-Type", "application/json")
+        }
+        try {
+            connection.outputStream.use { stream ->
+                stream.write(body.toString().toByteArray(StandardCharsets.UTF_8))
+            }
+            val status = connection.responseCode
+            val source = if (status in 200..299) connection.inputStream else connection.errorStream
+            val responseText = source?.use { stream ->
+                BufferedReader(InputStreamReader(stream, StandardCharsets.UTF_8)).readText()
+            }.orEmpty()
+            if (status !in 200..299) {
+                val apiMessage = runCatching {
+                    JSONObject(responseText).optJSONObject("error")?.optString("message")
+                }.getOrNull()
+                throw IllegalStateException(apiMessage?.takeIf { it.isNotBlank() } ?: "Erreur OpenAI HTTP $status")
+            }
+            return JSONObject(responseText)
+        } finally {
+            connection.disconnect()
+        }
+    }
+
+    private fun extractResponseText(response: JSONObject): String {
+        val output = response.optJSONArray("output") ?: JSONArray()
+        val parts = mutableListOf<String>()
+        for (index in 0 until output.length()) {
+            val content = output.optJSONObject(index)?.optJSONArray("content") ?: continue
+            for (contentIndex in 0 until content.length()) {
+                val item = content.optJSONObject(contentIndex) ?: continue
+                if (item.optString("type") == "output_text") {
+                    item.optString("text").takeIf { it.isNotBlank() }?.let(parts::add)
+                }
+            }
+        }
+        return parts.joinToString("\n").trim()
+            .takeIf { it.isNotBlank() }
+            ?: throw IllegalStateException("La réponse IA reçue est vide.")
+    }
+
+    private fun dispatchAiResponse(requestId: String, ok: Boolean, text: String, error: String?) {
+        dispatchWebEvent("vitalis-ai-response", JSONObject().apply {
+            put("requestId", requestId)
+            put("ok", ok)
+            put("text", text)
+            put("error", error ?: JSONObject.NULL)
+            put("model", if (ok) OPENAI_MODEL else JSONObject.NULL)
+        })
+    }
+
+    private fun sanitizedHealthContext(): JSONObject {
+        val source = lastHealthPayload
+        return JSONObject().apply {
+            listOf(
+                "periodHours", "steps", "sleepMinutes", "exerciseMinutes", "averageHeartRate",
+                "hydrationLitres", "distanceKm", "activeCalories", "oxygenPercent", "weightKg",
+                "nutrition", "score", "scoreBreakdown", "attribution", "connectorCount", "syncedAt"
+            ).forEach { key ->
+                if (source.has(key)) put(key, source.opt(key))
+            }
+        }
+    }
+
+    private fun readOpenAiKey(): String? =
+        runCatching { readEncryptedSecret(OPENAI_SECRET_NAME) }
+            .getOrNull()
+            ?.takeIf { it.startsWith("sk-") && it.length >= 30 }
+
+    private fun writeEncryptedSecret(name: String, value: String) {
+        val cipher = Cipher.getInstance(KEYSTORE_TRANSFORMATION)
+        cipher.init(Cipher.ENCRYPT_MODE, getOrCreateSecretKey())
+        val encrypted = cipher.doFinal(value.toByteArray(StandardCharsets.UTF_8))
+        val encoded = Base64.encodeToString(cipher.iv, Base64.NO_WRAP) + ":" +
+            Base64.encodeToString(encrypted, Base64.NO_WRAP)
+        getSharedPreferences(SECURE_PREFS, MODE_PRIVATE).edit().putString(name, encoded).apply()
+    }
+
+    private fun readEncryptedSecret(name: String): String? {
+        val encoded = getSharedPreferences(SECURE_PREFS, MODE_PRIVATE).getString(name, null) ?: return null
+        val separator = encoded.indexOf(':')
+        if (separator <= 0 || separator >= encoded.lastIndex) return null
+        val iv = Base64.decode(encoded.substring(0, separator), Base64.NO_WRAP)
+        val encrypted = Base64.decode(encoded.substring(separator + 1), Base64.NO_WRAP)
+        val cipher = Cipher.getInstance(KEYSTORE_TRANSFORMATION)
+        cipher.init(Cipher.DECRYPT_MODE, getOrCreateSecretKey(), GCMParameterSpec(128, iv))
+        return String(cipher.doFinal(encrypted), StandardCharsets.UTF_8)
+    }
+
+    private fun getOrCreateSecretKey(): SecretKey {
+        val keyStore = KeyStore.getInstance(ANDROID_KEYSTORE).apply { load(null) }
+        (keyStore.getKey(KEYSTORE_ALIAS, null) as? SecretKey)?.let { return it }
+        return KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, ANDROID_KEYSTORE).run {
+            init(
+                KeyGenParameterSpec.Builder(
+                    KEYSTORE_ALIAS,
+                    KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT
+                )
+                    .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
+                    .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
+                    .setKeySize(256)
+                    .build()
+            )
+            generateKey()
         }
     }
 
@@ -915,5 +1150,22 @@ class MainActivity : ComponentActivity() {
         private const val VITALIS_URL = "https://$VITALIS_HOST/"
         private const val REMOTE_LOAD_TIMEOUT_MS = 12_000L
         private const val MAX_SPEECH_TEXT_LENGTH = 8_000
+        private const val MAX_AI_PROMPT_LENGTH = 4_000
+        private const val MAX_IMAGE_DATA_URL_LENGTH = 6_000_000
+        private const val OPENAI_RESPONSES_URL = "https://api.openai.com/v1/responses"
+        private const val OPENAI_MODEL = "gpt-5.6"
+        private const val APP_PREFS = "vitalis_preferences"
+        private const val SECURE_PREFS = "vitalis_secure_preferences"
+        private const val OPENAI_SECRET_NAME = "openai_api_key"
+        private const val AI_HEALTH_CONSENT = "ai_health_consent"
+        private const val ANDROID_KEYSTORE = "AndroidKeyStore"
+        private const val KEYSTORE_ALIAS = "vitalis_openai_key_v1"
+        private const val KEYSTORE_TRANSFORMATION = "AES/GCM/NoPadding"
+        private const val KOFI_INSTRUCTIONS =
+            "Tu es Kofi, coach bien-être de Vitalis. Réponds en français clair, chaleureux et concret. " +
+                "Analyse uniquement les données fournies, indique les données manquantes et cite les connecteurs " +
+                "visibles quand ils sont disponibles. Ne pose aucun diagnostic et ne remplace jamais un professionnel " +
+                "de santé. Pour un symptôme grave ou urgent, recommande immédiatement de contacter les services " +
+                "d’urgence locaux. Donne au maximum trois priorités réalistes et explique brièvement pourquoi."
     }
 }
