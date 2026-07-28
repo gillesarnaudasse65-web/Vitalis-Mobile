@@ -212,7 +212,7 @@
   };
 
   window.dispatchEvent(new CustomEvent("vitalis-native-compat-ready", {
-    detail: { platform: "android", version: "3.6" }
+    detail: { platform: "android", version: "3.8" }
   }));
 
   setTimeout(function () {
