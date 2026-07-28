@@ -11,8 +11,8 @@ android {
         applicationId = "com.vitalis.healthos"
         minSdk = 28
         targetSdk = 35
-        versionCode = 12
-        versionName = "3.8.0-deep-health-details"
+        versionCode = 13
+        versionName = "3.9.0-kofi-ai"
     }
 
     buildTypes {
