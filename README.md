@@ -5,6 +5,8 @@ Application Android Vitalis Health OS avec interface classique, passerelle Healt
 ## Vitalis 3.9 — fonctions IA opérationnelles
 
 - L’interface classique reste inchangée et demeure l’interface principale.
+- La version 3.9.1 conserve strictement l’interface historique du site : les anciens boutons sont rendus fonctionnels sans ajouter de barre ou de boutons flottants.
+- Le chargement de l’interface classique dispose de délais plus adaptés aux connexions mobiles et de deux nouvelles tentatives avant le mode hors ligne.
 - **Kofi, coach IA** utilise désormais l’API OpenAI Responses pour répondre aux questions et analyser les données Vitalis autorisées.
 - Les analyses IA précédentes sont reliées au même moteur : bilan santé, score, nutrition, activité, sommeil, récupération, stress, recommandations et rapport personnalisé.
 - Les boutons IA de l’interface classique sont reconnus par leur libellé et ouvrent automatiquement l’analyse correspondante.
