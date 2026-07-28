@@ -224,3 +224,214 @@
     }
   }, 1400);
 })();
+
+(function () {
+  if (window.__vitalisConnectorVoiceControls) return;
+  window.__vitalisConnectorVoiceControls = true;
+
+  var bridge = window.VitalisAndroid || null;
+  var lastData = {};
+  var connectorState = { connectors: [], connectorCount: 0 };
+  var refreshRequested = false;
+  var microphoneOn = bridge && bridge.isMicrophoneEnabled ? bridge.isMicrophoneEnabled() : false;
+  var speaking = bridge && bridge.isSpeaking ? bridge.isSpeaking() : false;
+
+  function parseBridge(method, fallback) {
+    try { return JSON.parse(method.call(bridge)); }
+    catch (_) { return fallback; }
+  }
+
+  if (bridge && bridge.getLastHealthData) lastData = parseBridge(bridge.getLastHealthData, {});
+  if (bridge && bridge.getConnectorStatus) connectorState = parseBridge(bridge.getConnectorStatus, connectorState);
+
+  function escapeHtml(value) {
+    return String(value == null ? "" : value).replace(/[&<>"']/g, function (char) {
+      return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[char];
+    });
+  }
+
+  function installStyles() {
+    if (document.getElementById("vitalis-connector-controls-style")) return;
+    var style = document.createElement("style");
+    style.id = "vitalis-connector-controls-style";
+    style.textContent =
+      ".vitalis-control-dock{position:fixed;z-index:2147483600;right:12px;bottom:86px;display:flex;flex-direction:column;gap:8px;font-family:system-ui,-apple-system,sans-serif}" +
+      ".vitalis-control-button{border:0;border-radius:999px;background:#063c30;color:white;min-width:48px;height:48px;padding:0 13px;display:flex;align-items:center;justify-content:center;gap:7px;box-shadow:0 7px 22px rgba(6,60,48,.28);font-weight:700}" +
+      ".vitalis-control-button span{font-size:11px}.vitalis-control-button.active{background:#b52727}.vitalis-control-button.loading{opacity:.7}" +
+      ".vitalis-source-overlay{position:fixed;z-index:2147483646;inset:0;background:rgba(4,34,26,.58);display:flex;align-items:flex-end;font-family:system-ui,-apple-system,sans-serif}" +
+      ".vitalis-source-sheet{width:100%;max-height:90vh;overflow:auto;background:#f8f6ef;border-radius:24px 24px 0 0;padding:18px 16px 30px;color:#14342b}" +
+      ".vitalis-source-head{display:flex;justify-content:space-between;align-items:center;position:sticky;top:-18px;background:#f8f6ef;padding:12px 0;z-index:2}.vitalis-source-head h3{margin:0}.vitalis-source-close{border:0;border-radius:50%;width:36px;height:36px;font-size:22px;background:#e0ebe5}" +
+      ".vitalis-source-summary{font-size:12px;color:#667b73;margin:2px 0 12px}.vitalis-source-row{background:#fff;border:1px solid #dbe6e0;border-radius:15px;padding:12px;margin:9px 0}" +
+      ".vitalis-source-top{display:flex;justify-content:space-between;gap:12px}.vitalis-source-top b{font-size:14px}.vitalis-source-value{font-weight:800;color:#063c30}.vitalis-source-meta{font-size:11px;color:#677b73;margin-top:6px;line-height:1.45}" +
+      ".vitalis-source-section{font-size:15px;margin:19px 2px 8px}.vitalis-source-badge{display:inline-block;border-radius:999px;background:#e2f3e9;color:#063c30;padding:6px 9px;font-size:11px;margin:4px 4px 0 0}" +
+      "@media(max-width:420px){.vitalis-control-button span{display:none}.vitalis-control-button{width:48px;padding:0}}";
+    document.head.appendChild(style);
+  }
+
+  function formatDate(value) {
+    if (!value) return "Date indisponible";
+    try { return new Intl.DateTimeFormat("fr-FR", {dateStyle:"short",timeStyle:"short"}).format(new Date(value)); }
+    catch (_) { return value; }
+  }
+
+  function metricDefinitions() {
+    return [
+      ["steps","Pas",function(v){return Number(v || 0).toLocaleString("fr-FR");}],
+      ["sleepMinutes","Sommeil",function(v){return v == null ? "—" : (Number(v)/60).toFixed(1)+" h";}],
+      ["exerciseMinutes","Activité",function(v){return v == null ? "—" : Math.round(v)+" min";}],
+      ["averageHeartRate","Fréquence cardiaque",function(v){return v == null ? "—" : Math.round(v)+" bpm";}],
+      ["hydrationLitres","Hydratation",function(v){return v == null ? "—" : Number(v).toFixed(2)+" L";}],
+      ["distanceKm","Distance",function(v){return v == null ? "—" : Number(v).toFixed(2)+" km";}],
+      ["activeCalories","Calories actives",function(v){return v == null ? "—" : Math.round(v)+" kcal";}],
+      ["oxygenPercent","Oxygène sanguin",function(v){return v == null ? "—" : Number(v).toFixed(1)+" %";}],
+      ["weightKg","Poids",function(v){return v == null ? "—" : Number(v).toFixed(1)+" kg";}]
+    ];
+  }
+
+  function showSourceReport() {
+    installStyles();
+    var old = document.querySelector(".vitalis-source-overlay");
+    if (old) old.remove();
+    var attribution = lastData.attribution || {};
+    var metrics = metricDefinitions().map(function (definition) {
+      var key = definition[0], title = definition[1], formatter = definition[2];
+      var source = attribution[key] || {};
+      var contributors = source.contributors || [];
+      return '<div class="vitalis-source-row"><div class="vitalis-source-top"><b>' +
+        escapeHtml(title) + '</b><span class="vitalis-source-value">' +
+        escapeHtml(formatter(lastData[key])) + '</span></div><div class="vitalis-source-meta">Dernière source : <b>' +
+        escapeHtml(source.lastConnector || "Aucune source") + '</b><br>Dernière donnée : ' +
+        escapeHtml(formatDate(source.lastRecordAt)) + '<br>Contributeurs : ' +
+        escapeHtml(contributors.length ? contributors.join(", ") : "Aucun") + '</div></div>';
+    }).join("");
+
+    var connectors = (connectorState.connectors || []).map(function (item) {
+      return '<span class="vitalis-source-badge">' + escapeHtml(item.name || item.packageName) + '</span>';
+    }).join("");
+
+    var overlay = document.createElement("div");
+    overlay.className = "vitalis-source-overlay";
+    overlay.innerHTML =
+      '<div class="vitalis-source-sheet"><div class="vitalis-source-head"><div><h3>Données et sources</h3><div class="vitalis-source-summary">Dernière synchronisation : ' +
+      escapeHtml(formatDate(lastData.syncedAt)) + ' • ' + Number(connectorState.connectorCount || lastData.connectorCount || 0) +
+      ' connecteur(s) détecté(s)</div></div><button class="vitalis-source-close" aria-label="Fermer">×</button></div>' +
+      metrics + '<h4 class="vitalis-source-section">Connecteurs détectés sans limite fixe</h4><div>' +
+      (connectors || '<span class="vitalis-source-summary">Aucune source n’a encore transmis de données via Health Connect.</span>') +
+      '</div></div>';
+    document.body.appendChild(overlay);
+    overlay.querySelector(".vitalis-source-close").onclick = function () { overlay.remove(); };
+    overlay.addEventListener("click", function (event) { if (event.target === overlay) overlay.remove(); });
+  }
+
+  function createControls() {
+    installStyles();
+    if (document.getElementById("vitalis-native-control-dock")) return;
+    var dock = document.createElement("div");
+    dock.id = "vitalis-native-control-dock";
+    dock.className = "vitalis-control-dock";
+    dock.innerHTML =
+      '<button class="vitalis-control-button" data-vitalis-control="refresh" aria-label="Actualiser les données" title="Actualiser les données">↻ <span>Actualiser</span></button>' +
+      '<button class="vitalis-control-button" data-vitalis-control="voice" aria-label="Activer ou arrêter la voix" title="Voix du coach">🔊 <span>Voix</span></button>' +
+      '<button class="vitalis-control-button" data-vitalis-control="microphone" aria-label="Activer ou couper le micro" title="Microphone">🎙️ <span>Micro</span></button>';
+    document.body.appendChild(dock);
+
+    dock.querySelector('[data-vitalis-control="refresh"]').onclick = function () {
+      refreshRequested = true;
+      this.classList.add("loading");
+      this.innerHTML = '⟳ <span>Sync…</span>';
+      if (bridge && bridge.refreshHealthData) bridge.refreshHealthData();
+      else showSourceReport();
+    };
+    dock.querySelector('[data-vitalis-control="voice"]').onclick = function () {
+      if (!bridge || !bridge.speakText) return;
+      if (speaking || (bridge.isSpeaking && bridge.isSpeaking())) {
+        bridge.stopSpeaking();
+        speaking = false;
+        updateControlStates();
+        return;
+      }
+      var message = buildHealthSummary();
+      bridge.speakText(message, "fr-FR");
+    };
+    dock.querySelector('[data-vitalis-control="microphone"]').onclick = function () {
+      microphoneOn = !microphoneOn;
+      if (bridge && bridge.setMicrophoneEnabled) bridge.setMicrophoneEnabled(microphoneOn);
+      updateControlStates();
+    };
+    updateControlStates();
+  }
+
+  function buildHealthSummary() {
+    if (!lastData || !lastData.syncedAt) return "Aucune donnée récente. Appuyez sur Actualiser et autorisez Health Connect.";
+    var parts = ["Voici votre résumé Vitalis."];
+    if (lastData.steps != null) parts.push(Math.round(lastData.steps) + " pas.");
+    if (lastData.sleepMinutes != null) parts.push((Number(lastData.sleepMinutes)/60).toFixed(1) + " heures de sommeil.");
+    if (lastData.averageHeartRate != null) parts.push("Fréquence cardiaque moyenne " + Math.round(lastData.averageHeartRate) + " battements par minute.");
+    if (lastData.hydrationLitres != null) parts.push("Hydratation " + Number(lastData.hydrationLitres).toFixed(1) + " litres.");
+    return parts.join(" ");
+  }
+
+  function updateControlStates() {
+    var mic = document.querySelector('[data-vitalis-control="microphone"]');
+    var voice = document.querySelector('[data-vitalis-control="voice"]');
+    if (mic) {
+      mic.classList.toggle("active", microphoneOn);
+      mic.innerHTML = microphoneOn ? '⏹ <span>Couper micro</span>' : '🎙️ <span>Micro</span>';
+      mic.setAttribute("aria-pressed", microphoneOn ? "true" : "false");
+    }
+    if (voice) {
+      voice.classList.toggle("active", speaking);
+      voice.innerHTML = speaking ? '⏹ <span>Arrêter voix</span>' : '🔊 <span>Voix</span>';
+      voice.setAttribute("aria-pressed", speaking ? "true" : "false");
+    }
+  }
+
+  window.addEventListener("vitalis-health-data", function (event) {
+    lastData = event.detail || {};
+    if (refreshRequested) {
+      refreshRequested = false;
+      var button = document.querySelector('[data-vitalis-control="refresh"]');
+      if (button) {
+        button.classList.remove("loading");
+        button.innerHTML = '↻ <span>Actualiser</span>';
+      }
+      showSourceReport();
+    }
+  });
+
+  window.addEventListener("vitalis-connectors", function (event) {
+    connectorState = event.detail || connectorState;
+  });
+
+  window.addEventListener("vitalis-sync-state", function (event) {
+    var status = event.detail && event.detail.status;
+    var button = document.querySelector('[data-vitalis-control="refresh"]');
+    if (button && (status === "error" || status === "permission_required" || status === "unavailable")) {
+      button.classList.remove("loading");
+      button.innerHTML = '↻ <span>Actualiser</span>';
+      refreshRequested = false;
+    }
+  });
+
+  window.addEventListener("vitalis-voice-state", function (event) {
+    var detail = event.detail || {};
+    microphoneOn = !!detail.microphoneEnabled;
+    speaking = !!detail.speaking;
+    updateControlStates();
+  });
+
+  window.addEventListener("vitalis-voice-input", function (event) {
+    window.dispatchEvent(new CustomEvent("vitalis-coach-voice-input", { detail: event.detail }));
+  });
+
+  window.VitalisConnectorControls = {
+    refresh: function () { if (bridge && bridge.refreshHealthData) bridge.refreshHealthData(); },
+    showSources: showSourceReport,
+    microphoneOn: function () { if (bridge && bridge.setMicrophoneEnabled) bridge.setMicrophoneEnabled(true); },
+    microphoneOff: function () { if (bridge && bridge.setMicrophoneEnabled) bridge.setMicrophoneEnabled(false); },
+    speak: function (text, language) { if (bridge && bridge.speakText) bridge.speakText(text, language || "fr-FR"); },
+    stopSpeaking: function () { if (bridge && bridge.stopSpeaking) bridge.stopSpeaking(); }
+  };
+
+  createControls();
+})();
