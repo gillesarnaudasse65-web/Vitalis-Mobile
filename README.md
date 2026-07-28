@@ -2,7 +2,19 @@
 
 Application Android Vitalis Health OS avec interface classique, passerelle Health Connect, traçabilité des sources et continuité hors ligne.
 
-## Vitalis 3.8 — score explicable et détails santé
+## Vitalis 3.9 — fonctions IA opérationnelles
+
+- L’interface classique reste inchangée et demeure l’interface principale.
+- **Kofi, coach IA** utilise désormais l’API OpenAI Responses pour répondre aux questions et analyser les données Vitalis autorisées.
+- Les analyses IA précédentes sont reliées au même moteur : bilan santé, score, nutrition, activité, sommeil, récupération, stress, recommandations et rapport personnalisé.
+- Les boutons IA de l’interface classique sont reconnus par leur libellé et ouvrent automatiquement l’analyse correspondante.
+- Le scanner de repas peut analyser la photo et estimer les aliments, calories et macronutriments avec un avertissement clair sur l’incertitude.
+- Une analyse locale contextualisée reste disponible sans clé, sans Internet ou lorsque le service IA est indisponible : aucun bouton IA ne reste inactif.
+- La dictée vocale alimente directement le coach ; le microphone et la lecture vocale peuvent être activés ou coupés séparément.
+- La clé OpenAI n’est jamais inscrite dans l’APK ou dans GitHub : l’utilisateur la renseigne dans Vitalis et Android Keystore la chiffre sur le téléphone.
+- Le consentement explicite est obligatoire avant toute transmission de données santé ou de photo à l’IA.
+
+## Score explicable et détails santé
 
 - L’interface classique reste l’interface principale, sans modification visuelle.
 - **Comprendre mon score** ouvre désormais le calcul détaillé sur 100 points.
@@ -31,7 +43,16 @@ Samsung Health, Google Fit, Mibro Fit, Fitbit et d’autres services peuvent fon
 - Le micro reste coupé au démarrage.
 - Le bouton rouge **Couper micro** arrête immédiatement l’écoute.
 - La voix de lecture peut être arrêtée avec le même bouton **Voix**.
-- Aucune clé API n’est intégrée dans l’APK.
+- Aucune clé API n’est intégrée dans l’APK ou publiée dans GitHub.
+
+## Première activation de Kofi IA
+
+1. Ouvrir **Coach** ou **Ouvrir le coach** dans Vitalis.
+2. Coller la clé OpenAI dédiée « Vitalis AI ».
+3. Lire puis accepter le consentement de transmission des données nécessaires.
+4. Appuyer sur **Activer l’IA**.
+
+La clé reste chiffrée sur l’appareil. La supprimer depuis les réglages IA révoque la configuration locale ; la révocation définitive d’une clé s’effectue également dans OpenAI Platform.
 
 ## Télécharger l’APK
 
