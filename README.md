@@ -2,9 +2,14 @@
 
 Application Android Vitalis Health OS avec interface classique, passerelle Health Connect, traçabilité des sources et continuité hors ligne.
 
-## Vitalis 3.7 — connecteurs, sources et voix
+## Vitalis 3.8 — score explicable et détails santé
 
-- L’interface classique reste l’interface principale.
+- L’interface classique reste l’interface principale, sans modification visuelle.
+- **Comprendre mon score** ouvre désormais le calcul détaillé sur 100 points.
+- Le score est décomposé en activité, sommeil, hydratation, nutrition et récupération, avec 20 points par catégorie.
+- Chaque catégorie donne accès à ses enregistrements détaillés, à la source et à l’heure.
+- La nutrition affiche calories, glucides, protéines, graisses, fibres, sucre et sodium, ainsi que le détail de chaque repas.
+- L’activité affiche le type, la durée, les notes, l’heure et le connecteur de chaque séance.
 - Les sources Health Connect sont découvertes dynamiquement, sans liste ni nombre maximum codé dans Vitalis.
 - Chaque donnée synchronisée indique le dernier connecteur, son package, l’heure de la dernière mesure et tous les contributeurs détectés.
 - Un bouton **Actualiser** relance la lecture Health Connect et ouvre le rapport détaillé des données et sources.
