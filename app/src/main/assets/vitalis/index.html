@@ -1,0 +1,176 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#063c30">
+<title>Vitalis Health OS</title>
+<style>
+:root{--green:#063c30;--green2:#0b6049;--mint:#67d997;--cream:#f8f6ef;--card:#fff;--ink:#14342b;--muted:#688078;--line:#dfe8e3;--warn:#f6c453;--danger:#d45b5b;--shadow:0 10px 30px rgba(6,60,48,.09)}
+*{box-sizing:border-box}body{margin:0;background:var(--cream);color:var(--ink);font-family:Inter,system-ui,-apple-system,Segoe UI,sans-serif;padding-bottom:86px}button,input,select,textarea{font:inherit}button{cursor:pointer}.hidden{display:none!important}
+header{position:sticky;top:0;z-index:20;background:linear-gradient(135deg,var(--green),#0b5743);color:#fff;padding:calc(15px + env(safe-area-inset-top)) 18px 16px;border-radius:0 0 26px 26px;box-shadow:var(--shadow)}
+.top{display:flex;align-items:center;justify-content:space-between}.brand{display:flex;gap:11px;align-items:center}.logo{width:42px;height:42px;border-radius:14px;background:rgba(255,255,255,.14);display:grid;place-items:center;font-size:24px}.brand b{display:block;font-size:18px}.brand small{opacity:.75}.status{font-size:12px;padding:7px 10px;border-radius:99px;background:rgba(255,255,255,.13)}
+.hero{margin-top:18px}.hero h1{font-size:23px;margin:0 0 5px}.hero p{margin:0;opacity:.78;font-size:13px}.score-row{display:flex;gap:14px;align-items:center;margin-top:17px}.score{width:76px;height:76px;border-radius:50%;display:grid;place-items:center;background:conic-gradient(var(--mint) 0 76%,rgba(255,255,255,.14) 76%);position:relative}.score:after{content:"";position:absolute;inset:7px;border-radius:50%;background:var(--green)}.score strong{z-index:1;font-size:24px}.score-copy b,.score-copy span{display:block}.score-copy span{font-size:12px;opacity:.73;margin-top:4px}
+main{padding:17px;max-width:760px;margin:auto}.banner{padding:11px 13px;border-radius:13px;background:#fff3d2;color:#775a10;font-size:12px;margin-bottom:14px;border:1px solid #f3dfa2}
+.section-title{display:flex;justify-content:space-between;align-items:end;margin:20px 1px 10px}.section-title h2{font-size:17px;margin:0}.section-title span{font-size:12px;color:var(--muted)}
+.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:11px}.metric{background:var(--card);border:1px solid var(--line);border-radius:18px;padding:14px;box-shadow:0 5px 18px rgba(6,60,48,.05)}.metric .icon{font-size:21px}.metric strong{display:block;font-size:22px;margin-top:8px}.metric small{color:var(--muted)}.metric .bar{height:5px;background:#edf2ef;border-radius:5px;margin-top:11px;overflow:hidden}.metric .bar i{display:block;height:100%;width:55%;background:var(--mint);border-radius:5px}
+.actions{display:grid;grid-template-columns:repeat(4,1fr);gap:9px}.action{border:0;background:#fff;border-radius:16px;padding:13px 5px;color:var(--ink);box-shadow:0 5px 18px rgba(6,60,48,.06);min-height:84px}.action span{display:block;font-size:23px;margin-bottom:7px}.action small{font-size:11px}
+.coach{background:linear-gradient(135deg,#e7fff0,#fff);border:1px solid #ccebd8;border-radius:22px;padding:16px;box-shadow:var(--shadow)}.coach-head{display:flex;align-items:center;gap:12px}.avatar{width:58px;height:58px;border-radius:20px;background:linear-gradient(145deg,var(--green2),var(--mint));display:grid;place-items:center;color:#fff;font-size:29px;box-shadow:0 7px 16px rgba(6,60,48,.18)}.coach-head h3{margin:0;font-size:17px}.coach-head small{color:var(--muted)}.coach p{line-height:1.48;font-size:14px}.coach-actions{display:flex;gap:8px}.pill{border:0;border-radius:99px;padding:9px 13px;background:var(--green);color:#fff;font-size:12px}.pill.alt{background:#e2f3e9;color:var(--green)}
+.list{background:#fff;border:1px solid var(--line);border-radius:18px;overflow:hidden}.row{display:flex;align-items:center;gap:12px;padding:14px;border-bottom:1px solid var(--line)}.row:last-child{border:0}.row .r-icon{font-size:23px;width:32px;text-align:center}.row .r-body{flex:1}.row b,.row small{display:block}.row small{color:var(--muted);margin-top:3px}.tag{font-size:11px;border-radius:99px;background:#e8f6ed;color:var(--green);padding:6px 8px}.tag.pending{background:#fff2cf;color:#84620a}
+.page{display:none}.page.active{display:block}.empty{text-align:center;color:var(--muted);padding:28px 15px}.note{font-size:12px;color:var(--muted);line-height:1.45}
+nav{position:fixed;z-index:30;left:10px;right:10px;bottom:calc(8px + env(safe-area-inset-bottom));height:68px;background:#fff;border:1px solid var(--line);border-radius:22px;display:grid;grid-template-columns:repeat(5,1fr);box-shadow:0 9px 30px rgba(6,60,48,.18)}nav button{border:0;background:transparent;color:var(--muted);font-size:10px;padding:8px 2px}nav button span{display:block;font-size:21px;margin-bottom:3px}nav button.active{color:var(--green);font-weight:700}
+.modal{position:fixed;z-index:50;inset:0;background:rgba(5,31,24,.55);display:flex;align-items:flex-end}.sheet{background:var(--cream);width:100%;max-height:90vh;overflow:auto;border-radius:26px 26px 0 0;padding:19px 17px calc(24px + env(safe-area-inset-bottom))}.sheet-head{display:flex;justify-content:space-between;align-items:center}.sheet h3{margin:0}.close{border:0;background:#e5ece8;border-radius:50%;width:34px;height:34px}.field{margin-top:14px}.field label{font-size:12px;color:var(--muted);display:block;margin:0 0 6px}.field input,.field select,.field textarea{width:100%;border:1px solid #cedbd4;background:#fff;border-radius:13px;padding:12px;color:var(--ink)}.save{width:100%;border:0;border-radius:14px;padding:13px;margin-top:17px;background:var(--green);color:#fff;font-weight:700}.photo{width:100%;max-height:210px;object-fit:cover;border-radius:16px;margin-top:12px}
+.source-card{display:flex;align-items:center;gap:12px;background:#fff;border:1px solid var(--line);padding:13px;border-radius:16px;margin-bottom:9px}.source-card .source-icon{width:41px;height:41px;border-radius:13px;background:#edf7f1;display:grid;place-items:center}.source-card .source-copy{flex:1}.source-card b,.source-card small{display:block}.source-card small{font-size:11px;color:var(--muted);margin-top:3px}
+.profile-card{background:#fff;border:1px solid var(--line);border-radius:20px;padding:16px}.profile-card input{width:100%;border:0;border-bottom:1px solid var(--line);padding:12px 2px;background:transparent}
+@media(min-width:650px){.grid{grid-template-columns:repeat(4,1fr)}.sheet{max-width:620px;margin:auto;border-radius:26px}.modal{align-items:center}.actions{gap:14px}}
+</style>
+</head>
+<body>
+<header>
+ <div class="top"><div class="brand"><div class="logo">🌿</div><div><b>Vitalis Health OS</b><small>Votre santé, unifiée</small></div></div><div class="status" id="connectionStatus">Hors ligne prêt</div></div>
+ <div class="hero"><h1 id="greeting">Bonsoir Gilles</h1><p id="today"></p><div class="score-row"><div class="score"><strong id="healthScore">76</strong></div><div class="score-copy"><b>Score Vitalis</b><span id="scoreText">Bonne dynamique. Continuez ainsi.</span></div></div></div>
+</header>
+<main>
+ <div id="offlineBanner" class="banner hidden">Mode hors ligne actif : vos données restent disponibles. Les fonctions IA en ligne reprendront automatiquement avec Internet.</div>
+ <section id="dashboard" class="page active">
+  <div class="section-title"><h2>Aujourd’hui</h2><span id="lastSync">Données locales</span></div>
+  <div class="grid">
+   <article class="metric"><span class="icon">👟</span><strong id="steps">0</strong><small>pas / 8 000</small><div class="bar"><i id="stepsBar"></i></div></article>
+   <article class="metric"><span class="icon">😴</span><strong id="sleep">—</strong><small>sommeil / 8 h</small><div class="bar"><i id="sleepBar"></i></div></article>
+   <article class="metric"><span class="icon">❤️</span><strong id="heart">—</strong><small>bpm moyen</small><div class="bar"><i id="heartBar"></i></div></article>
+   <article class="metric"><span class="icon">💧</span><strong id="water">0.0 L</strong><small>hydratation / 2,5 L</small><div class="bar"><i id="waterBar"></i></div></article>
+   <article class="metric"><span class="icon">🔥</span><strong id="calories">—</strong><small>kcal actives</small><div class="bar"><i style="width:42%"></i></div></article>
+   <article class="metric"><span class="icon">📍</span><strong id="distance">—</strong><small>kilomètres</small><div class="bar"><i style="width:38%"></i></div></article>
+   <article class="metric"><span class="icon">🫁</span><strong id="oxygen">—</strong><small>SpO₂</small><div class="bar"><i style="width:90%"></i></div></article>
+   <article class="metric"><span class="icon">⚖️</span><strong id="weight">—</strong><small>poids</small><div class="bar"><i style="width:65%"></i></div></article>
+  </div>
+  <div class="section-title"><h2>Actions rapides</h2><span>Ajouter une donnée</span></div>
+  <div class="actions">
+   <button class="action" data-action="meal"><span>📷</span><small>Scanner un repas</small></button>
+   <button class="action" data-action="activity"><span>🏃</span><small>Enregistrer activité</small></button>
+   <button class="action" data-action="water"><span>💧</span><small>Ajouter de l’eau</small></button>
+   <button class="action" data-action="measure"><span>🩺</span><small>Ajouter mesure</small></button>
+  </div>
+  <div class="section-title"><h2>Coach Vitalis</h2><span>Analyse personnalisée</span></div>
+  <article class="coach"><div class="coach-head"><div class="avatar">🧑🏾‍⚕️</div><div><h3>Kofi, coach santé IA</h3><small>Suivi quotidien • données privées</small></div></div><p id="coachMessage">Je prépare votre bilan à partir de vos données du jour.</p><div class="coach-actions"><button class="pill" id="coachRefresh">Actualiser le conseil</button><button class="pill alt" data-page="coach">Ouvrir le coach</button></div></article>
+  <div class="section-title"><h2>Dernières données</h2><span>Journal local</span></div><div id="recentList" class="list"></div>
+ </section>
+ <section id="journal" class="page"><div class="section-title"><h2>Journal santé</h2><span id="journalCount">0 entrée</span></div><div id="journalList" class="list"></div><p class="note">Les saisies manuelles sont conservées sur votre téléphone. Elles ne sont pas envoyées à un service tiers sans votre action.</p></section>
+ <section id="coach" class="page">
+  <div class="section-title"><h2>Kofi — Coach Vitalis</h2><span>Mode local intelligent</span></div>
+  <article class="coach"><div class="coach-head"><div class="avatar">🧑🏾‍⚕️</div><div><h3>Votre point santé</h3><small id="coachMode">Analyse disponible hors ligne</small></div></div><p id="coachLong"></p></article>
+  <div class="section-title"><h2>Priorités du jour</h2><span>Plan d’action</span></div><div id="priorities" class="list"></div>
+  <p class="note">Kofi fournit des recommandations de bien-être, pas un diagnostic médical. En cas de symptôme inquiétant, consultez un professionnel de santé.</p>
+ </section>
+ <section id="sources" class="page">
+  <div class="section-title"><h2>Sources et appareils</h2><span id="sourceSummary">À synchroniser</span></div>
+  <button class="save" id="authorizeHealth">Autoriser dans Health Connect</button>
+  <button class="save" style="background:#e2f3e9;color:#063c30;margin-top:9px" id="refreshHealth">Actualiser les données</button>
+  <div style="height:15px"></div><div id="sourceList"></div>
+  <p class="note">Vitalis évite les doublons à partir de la source et de l’heure des mesures. Une application ne peut fournir des données que si elle les publie dans Health Connect ou autorise sa propre API.</p>
+ </section>
+ <section id="profile" class="page"><div class="section-title"><h2>Mon profil</h2><span>Objectifs personnels</span></div><div class="profile-card">
+   <input id="profileName" placeholder="Prénom"><input id="stepGoal" type="number" placeholder="Objectif de pas"><input id="waterGoal" type="number" step=".1" placeholder="Objectif d’eau (L)"><input id="sleepGoal" type="number" step=".5" placeholder="Objectif sommeil (h)">
+   <button class="save" id="saveProfile">Enregistrer le profil</button>
+  </div><div class="section-title"><h2>Confidentialité</h2><span>Contrôle utilisateur</span></div><div class="list"><div class="row"><div class="r-icon">🔒</div><div class="r-body"><b>Stockage local</b><small>Vos saisies restent sur cet appareil.</small></div><span class="tag">Actif</span></div><div class="row"><div class="r-icon">🧹</div><div class="r-body"><b>Effacer les saisies locales</b><small>Supprime uniquement le journal manuel.</small></div><button class="pill alt" id="clearData">Effacer</button></div></div></section>
+</main>
+<nav>
+ <button class="active" data-page="dashboard"><span>⌂</span>Accueil</button><button data-page="journal"><span>▤</span>Journal</button><button data-page="coach"><span>✦</span>Coach</button><button data-page="sources"><span>⌁</span>Sources</button><button data-page="profile"><span>⚙</span>Profil</button>
+</nav>
+<div class="modal hidden" id="modal"><div class="sheet"><div class="sheet-head"><h3 id="modalTitle">Ajouter</h3><button class="close" id="closeModal">×</button></div><div id="modalBody"></div></div></div>
+<script>
+(function(){
+ var key="vitalis-offline-v1";
+ var defaults={profile:{name:"Gilles",stepGoal:8000,waterGoal:2.5,sleepGoal:8},health:{steps:0,sleepMinutes:null,averageHeartRate:null,hydrationLitres:0,distanceKm:null,activeCalories:null,oxygenPercent:null,weightKg:null,sources:[],syncedAt:null},entries:[]};
+ var state=load();
+ var connectors=["Samsung Health","Mibro Fit","Google Fit","Fitbit","Garmin","Huawei Health","Strava","Oura","WHOOP","Withings","FitOn","Fitify","FitCoach","FlexMe","Welmi"];
+ function load(){try{var v=JSON.parse(localStorage.getItem(key));return Object.assign({},defaults,v,{profile:Object.assign({},defaults.profile,v&&v.profile),health:Object.assign({},defaults.health,v&&v.health),entries:v&&v.entries||[]});}catch(e){return JSON.parse(JSON.stringify(defaults));}}
+ function save(){localStorage.setItem(key,JSON.stringify(state));}
+ function fmtDate(v){return new Intl.DateTimeFormat("fr-FR",{day:"2-digit",month:"short",hour:"2-digit",minute:"2-digit"}).format(new Date(v));}
+ function pct(v,max){return Math.max(3,Math.min(100,Math.round((Number(v)||0)/max*100)))+"%";}
+ function esc(s){return String(s==null?"":s).replace(/[&<>"']/g,function(c){return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c];});}
+ function native(){return window.VitalisAndroid||null;}
+ function setPage(id){document.querySelectorAll(".page").forEach(function(x){x.classList.toggle("active",x.id===id)});document.querySelectorAll("nav button").forEach(function(x){x.classList.toggle("active",x.dataset.page===id)});scrollTo(0,0);render();}
+ function render(){
+  var p=state.profile,h=state.health;
+  document.getElementById("greeting").textContent=(new Date().getHours()<18?"Bonjour ":"Bonsoir ")+(p.name||"");
+  document.getElementById("today").textContent=new Intl.DateTimeFormat("fr-FR",{weekday:"long",day:"numeric",month:"long"}).format(new Date());
+  document.getElementById("steps").textContent=Number(h.steps||0).toLocaleString("fr-FR");
+  document.getElementById("sleep").textContent=h.sleepMinutes==null?"—":(h.sleepMinutes/60).toFixed(1)+" h";
+  document.getElementById("heart").textContent=h.averageHeartRate==null?"—":Math.round(h.averageHeartRate);
+  document.getElementById("water").textContent=Number(h.hydrationLitres||0).toFixed(1)+" L";
+  document.getElementById("calories").textContent=h.activeCalories==null?"—":Math.round(h.activeCalories);
+  document.getElementById("distance").textContent=h.distanceKm==null?"—":Number(h.distanceKm).toFixed(1);
+  document.getElementById("oxygen").textContent=h.oxygenPercent==null?"—":Number(h.oxygenPercent).toFixed(0)+" %";
+  document.getElementById("weight").textContent=h.weightKg==null?"—":Number(h.weightKg).toFixed(1)+" kg";
+  document.getElementById("stepsBar").style.width=pct(h.steps,p.stepGoal);
+  document.getElementById("sleepBar").style.width=pct((h.sleepMinutes||0)/60,p.sleepGoal);
+  document.getElementById("heartBar").style.width=h.averageHeartRate?pct(100-Math.abs(h.averageHeartRate-70),100):"3%";
+  document.getElementById("waterBar").style.width=pct(h.hydrationLitres,p.waterGoal);
+  document.getElementById("lastSync").textContent=h.syncedAt?"Sync "+fmtDate(h.syncedAt):"Données locales";
+  document.getElementById("profileName").value=p.name;document.getElementById("stepGoal").value=p.stepGoal;document.getElementById("waterGoal").value=p.waterGoal;document.getElementById("sleepGoal").value=p.sleepGoal;
+  var analysis=coach();
+  document.getElementById("healthScore").textContent=analysis.score;document.getElementById("scoreText").textContent=analysis.short;document.getElementById("coachMessage").textContent=analysis.message;document.getElementById("coachLong").textContent=analysis.long;
+  document.getElementById("priorities").innerHTML=analysis.priorities.map(function(x,i){return '<div class="row"><div class="r-icon">'+["①","②","③"][i]+'</div><div class="r-body"><b>'+esc(x.title)+'</b><small>'+esc(x.text)+'</small></div></div>';}).join("");
+  var entries=state.entries.slice().reverse();
+  document.getElementById("journalCount").textContent=entries.length+" entrée"+(entries.length>1?"s":"");
+  var empty='<div class="empty">Aucune saisie pour le moment.</div>';
+  document.getElementById("journalList").innerHTML=entries.length?entries.map(entryHtml).join(""):empty;
+  document.getElementById("recentList").innerHTML=entries.length?entries.slice(0,4).map(entryHtml).join(""):empty;
+  renderSources();
+ }
+ function entryHtml(e){var icons={meal:"🍽️",activity:"🏃",water:"💧",measure:"🩺"};return '<div class="row"><div class="r-icon">'+(icons[e.type]||"•")+'</div><div class="r-body"><b>'+esc(e.title)+'</b><small>'+fmtDate(e.at)+(e.detail?" • "+esc(e.detail):"")+'</small></div><span class="tag">Local</span></div>';}
+ function coach(){
+  var h=state.health,p=state.profile,known=0,total=0,prior=[];
+  if(h.steps){known++;total+=Math.min(100,h.steps/p.stepGoal*100);if(h.steps<p.stepGoal*.7)prior.push({title:"Bouger davantage",text:"Une marche de 15 à 20 minutes vous rapprochera de votre objectif."});}
+  if(h.sleepMinutes){known++;total+=Math.min(100,h.sleepMinutes/60/p.sleepGoal*100);if(h.sleepMinutes/60<p.sleepGoal-.8)prior.push({title:"Protéger le sommeil",text:"Préparez un coucher plus régulier et réduisez les écrans avant de dormir."});}
+  if(h.hydrationLitres){known++;total+=Math.min(100,h.hydrationLitres/p.waterGoal*100);if(h.hydrationLitres<p.waterGoal*.75)prior.push({title:"Compléter l’hydratation",text:"Buvez progressivement, sans attendre d’avoir soif."});}
+  if(h.averageHeartRate){known++;total+=h.averageHeartRate>=50&&h.averageHeartRate<=100?85:55;}
+  if(!prior.length)prior.push({title:"Maintenir la régularité",text:"Continuez vos habitudes actuelles et synchronisez vos données ce soir."});
+  if(prior.length<3)prior.push({title:"Repas équilibré",text:"Privilégiez légumes, protéines adaptées et portions raisonnables."});
+  if(prior.length<3)prior.push({title:"Récupération active",text:"Prenez quelques minutes pour respirer, vous étirer et relâcher la tension."});
+  var score=known?Math.round(total/known):70;
+  return {score:score,short:score>=80?"Très bonne dynamique.":"Progression régulière.",message:known?"Votre priorité aujourd’hui : "+prior[0].text:"Connectez Health Connect ou ajoutez une première donnée pour personnaliser mes conseils.",long:"Votre score Vitalis est de "+score+"/100. Cette estimation combine activité, sommeil, hydratation et fréquence cardiaque lorsqu’ils sont disponibles. "+prior[0].text,priorities:prior.slice(0,3)};
+ }
+ function renderSources(){
+  var active=state.health.sources||[];
+  document.getElementById("sourceSummary").textContent=active.length?active.length+" source(s) détectée(s)":"Health Connect";
+  document.getElementById("sourceList").innerHTML=connectors.map(function(name){var hit=active.some(function(x){return x.toLowerCase().indexOf(name.split(" ")[0].toLowerCase())>=0});return '<div class="source-card"><div class="source-icon">⌁</div><div class="source-copy"><b>'+name+'</b><small>'+(hit?"Données détectées via Health Connect":"Disponible si le fournisseur partage les données")+'</small></div><span class="tag '+(hit?"":"pending")+'">'+(hit?"Connecté":"À autoriser")+'</span></div>';}).join("");
+ }
+ function openModal(type){
+  var titles={meal:"Scanner un repas",activity:"Enregistrer une activité",water:"Ajouter de l’eau",measure:"Ajouter une mesure"};document.getElementById("modalTitle").textContent=titles[type];var body="";
+  if(type==="meal")body='<div class="field"><label>Photo du repas</label><input id="mealPhoto" type="file" accept="image/*" capture="environment"><img id="mealPreview" class="photo hidden"></div><div class="field"><label>Nom ou contenu du repas</label><input id="mealName" placeholder="Ex. poulet, riz et légumes"></div><div class="field"><label>Appréciation</label><select id="mealQuality"><option>Équilibré</option><option>Léger</option><option>Riche</option><option>À analyser en ligne</option></select></div>';
+  if(type==="activity")body='<div class="field"><label>Activité</label><select id="activityName"><option>Marche</option><option>Course</option><option>Football</option><option>Musculation</option><option>Vélo</option><option>Natation</option><option>Autre</option></select></div><div class="field"><label>Durée (minutes)</label><input id="activityDuration" type="number" value="30" min="1"></div>';
+  if(type==="water")body='<div class="field"><label>Quantité</label><select id="waterAmount"><option value=".25">250 ml</option><option value=".33">330 ml</option><option value=".5">500 ml</option><option value=".75">750 ml</option></select></div>';
+  if(type==="measure")body='<div class="field"><label>Type de mesure</label><select id="measureType"><option>Poids</option><option>Tension artérielle</option><option>Glycémie</option><option>Température</option><option>SpO₂</option><option>Fréquence cardiaque</option></select></div><div class="field"><label>Valeur</label><input id="measureValue" placeholder="Ex. 78 kg ou 120/80"></div>';
+  body+='<button class="save" id="saveEntry">Enregistrer</button>';document.getElementById("modalBody").innerHTML=body;document.getElementById("modal").classList.remove("hidden");
+  var photo=document.getElementById("mealPhoto");if(photo)photo.onchange=function(){var f=this.files[0];if(f){var img=document.getElementById("mealPreview");img.src=URL.createObjectURL(f);img.classList.remove("hidden");}};
+  document.getElementById("saveEntry").onclick=function(){saveEntry(type);};
+ }
+ function saveEntry(type){
+  var title="",detail="";
+  if(type==="meal"){title=document.getElementById("mealName").value||"Repas photographié";detail=document.getElementById("mealQuality").value;}
+  if(type==="activity"){title=document.getElementById("activityName").value;detail=document.getElementById("activityDuration").value+" min";}
+  if(type==="water"){var v=Number(document.getElementById("waterAmount").value);state.health.hydrationLitres=Number(state.health.hydrationLitres||0)+v;title="Hydratation";detail=Math.round(v*1000)+" ml";}
+  if(type==="measure"){title=document.getElementById("measureType").value;detail=document.getElementById("measureValue").value||"Valeur non précisée";if(title==="Poids"){var w=parseFloat(detail.replace(",","."));if(w)state.health.weightKg=w;}}
+  state.entries.push({id:Date.now(),type:type,title:title,detail:detail,at:new Date().toISOString()});save();closeModal();render();setPage("journal");
+ }
+ function closeModal(){document.getElementById("modal").classList.add("hidden");}
+ document.querySelectorAll("[data-page]").forEach(function(b){b.onclick=function(){setPage(this.dataset.page);};});
+ document.querySelectorAll("[data-action]").forEach(function(b){b.onclick=function(){openModal(this.dataset.action);};});
+ document.getElementById("closeModal").onclick=closeModal;document.getElementById("modal").onclick=function(e){if(e.target===this)closeModal();};
+ document.getElementById("authorizeHealth").onclick=function(){if(native()&&native().requestHealthConnectPermissions)native().requestHealthConnectPermissions();else alert("Health Connect est disponible dans l’application Android Vitalis.");};
+ document.getElementById("refreshHealth").onclick=function(){if(native()&&native().refreshHealthData)native().refreshHealthData();else render();};
+ document.getElementById("coachRefresh").onclick=function(){render();document.getElementById("coachMessage").textContent=coach().message;};
+ document.getElementById("saveProfile").onclick=function(){state.profile={name:document.getElementById("profileName").value||"Gilles",stepGoal:Number(document.getElementById("stepGoal").value)||8000,waterGoal:Number(document.getElementById("waterGoal").value)||2.5,sleepGoal:Number(document.getElementById("sleepGoal").value)||8};save();render();alert("Profil enregistré.");};
+ document.getElementById("clearData").onclick=function(){if(confirm("Effacer toutes les saisies locales ?")){state.entries=[];save();render();}};
+ window.addEventListener("vitalis-health-data",function(e){state.health=Object.assign(state.health,e.detail||{});save();render();});
+ window.addEventListener("vitalis-connectors",function(e){if(e.detail&&e.detail.sourcePackages)state.health.sources=e.detail.sourcePackages;save();renderSources();});
+ window.addEventListener("vitalis-health-connect",function(e){if(e.detail&&e.detail.message)alert(e.detail.message);});
+ function online(){var on=navigator.onLine;document.getElementById("offlineBanner").classList.toggle("hidden",on);document.getElementById("connectionStatus").textContent=on?"En ligne • local prêt":"Hors ligne prêt";}
+ addEventListener("online",online);addEventListener("offline",online);online();render();
+ setTimeout(function(){if(native()&&native().refreshHealthData)native().refreshHealthData();},450);
+})();
+</script>
+</body>
+</html>
