@@ -435,3 +435,210 @@
 
   createControls();
 })();
+
+(function () {
+  if (window.__vitalisDeepDetails) return;
+  window.__vitalisDeepDetails = true;
+
+  var bridge = window.VitalisAndroid || null;
+  var healthData = {};
+  var pendingPanel = null;
+
+  function readNativeData() {
+    try { return bridge && bridge.getLastHealthData ? JSON.parse(bridge.getLastHealthData()) : {}; }
+    catch (_) { return {}; }
+  }
+  healthData = readNativeData();
+
+  function norm(value) {
+    return String(value || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/\s+/g, " ").trim();
+  }
+  function esc(value) {
+    return String(value == null ? "" : value).replace(/[&<>"']/g, function (c) {
+      return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c];
+    });
+  }
+  function date(value) {
+    if (!value) return "Date indisponible";
+    try { return new Intl.DateTimeFormat("fr-FR",{dateStyle:"short",timeStyle:"short"}).format(new Date(value)); }
+    catch (_) { return String(value); }
+  }
+  function number(value, decimals) {
+    var n = Number(value);
+    return isFinite(n) ? n.toLocaleString("fr-FR",{minimumFractionDigits:decimals||0,maximumFractionDigits:decimals||0}) : "—";
+  }
+
+  function styles() {
+    if (document.getElementById("vitalis-deep-details-style")) return;
+    var style = document.createElement("style");
+    style.id = "vitalis-deep-details-style";
+    style.textContent =
+      ".vitalis-deep-overlay{position:fixed;z-index:2147483647;inset:0;background:rgba(20,30,27,.58);display:flex;align-items:flex-end;font-family:system-ui,-apple-system,sans-serif}" +
+      ".vitalis-deep-sheet{width:100%;max-height:92vh;overflow:auto;background:#f7f7f7;border-radius:26px 26px 0 0;padding:18px 17px 32px;color:#171b19}" +
+      ".vitalis-deep-head{position:sticky;top:-18px;background:#f7f7f7;z-index:3;padding:12px 0;display:flex;align-items:center;justify-content:space-between}.vitalis-deep-head h3{margin:0;font-size:20px}.vitalis-deep-close{border:0;border-radius:50%;width:36px;height:36px;background:#e6e8e7;font-size:22px}" +
+      ".vitalis-deep-score{text-align:center;background:#fff;border-radius:20px;padding:18px;margin-bottom:12px}.vitalis-deep-score strong{font-size:42px}.vitalis-deep-score small{display:block;color:#747b78;margin-top:4px}" +
+      ".vitalis-deep-card{background:#fff;border-radius:17px;padding:14px;margin:9px 0;border:1px solid #eceeed}.vitalis-deep-top{display:flex;align-items:center;justify-content:space-between;gap:10px}.vitalis-deep-top b{font-size:15px}.vitalis-deep-points{font-weight:800;color:#d84d60}" +
+      ".vitalis-deep-bar{height:7px;background:#edf0ee;border-radius:8px;overflow:hidden;margin:10px 0}.vitalis-deep-bar i{display:block;height:100%;background:#d95568;border-radius:8px}.vitalis-deep-meta{font-size:12px;line-height:1.5;color:#6f7773}.vitalis-deep-action{border:0;background:transparent;color:#d84d60;font-weight:700;padding:9px 0 0}" +
+      ".vitalis-deep-section{font-size:16px;margin:20px 2px 8px}.vitalis-deep-macro{display:grid;grid-template-columns:1fr auto;gap:7px;padding:8px 0;border-bottom:1px solid #eff1f0}.vitalis-deep-macro:last-child{border:0}" +
+      ".vitalis-deep-empty{text-align:center;color:#777f7b;background:#fff;border-radius:17px;padding:26px 14px}.vitalis-deep-note{font-size:11px;color:#7a817e;line-height:1.45;margin-top:14px}";
+    document.head.appendChild(style);
+  }
+
+  function panel(title, body) {
+    styles();
+    var old = document.querySelector(".vitalis-deep-overlay");
+    if (old) old.remove();
+    var overlay = document.createElement("div");
+    overlay.className = "vitalis-deep-overlay";
+    overlay.innerHTML = '<div class="vitalis-deep-sheet"><div class="vitalis-deep-head"><h3>' +
+      esc(title) + '</h3><button class="vitalis-deep-close" aria-label="Fermer">×</button></div>' + body + '</div>';
+    document.body.appendChild(overlay);
+    overlay.querySelector(".vitalis-deep-close").onclick = function () { overlay.remove(); };
+    overlay.addEventListener("click", function (event) { if (event.target === overlay) overlay.remove(); });
+    overlay.querySelectorAll("[data-vitalis-deep-category]").forEach(function (button) {
+      button.onclick = function () { showCategory(this.getAttribute("data-vitalis-deep-category")); };
+    });
+  }
+
+  function ensureData(nextPanel) {
+    healthData = readNativeData();
+    if (healthData && healthData.syncedAt) { nextPanel(); return; }
+    pendingPanel = nextPanel;
+    panel("Synchronisation", '<div class="vitalis-deep-empty">Récupération des données Health Connect…</div>');
+    if (bridge && bridge.refreshHealthData) bridge.refreshHealthData();
+  }
+
+  function showScore() {
+    ensureData(function () {
+      var score = healthData.scoreBreakdown || {overall:0,maximum:100,components:[]};
+      var components = (score.components || []).map(function (item) {
+        return '<div class="vitalis-deep-card"><div class="vitalis-deep-top"><b>' + esc(item.label) +
+          '</b><span class="vitalis-deep-points">' + number(item.earnedPoints) + ' / ' + number(item.maxPoints) +
+          ' pts</span></div><div class="vitalis-deep-bar"><i style="width:' + Math.max(2,Number(item.percentage)||0) +
+          '%"></i></div><div class="vitalis-deep-meta">Actuel : <b>' + esc(item.current) +
+          '</b><br>Objectif : ' + esc(item.target) + '<br>' + esc(item.explanation) +
+          (item.available ? "" : "<br><b>Données manquantes : actualisez ou autorisez la source.</b>") +
+          '</div><button class="vitalis-deep-action" data-vitalis-deep-category="' + esc(item.key) +
+          '">Voir les détails →</button></div>';
+      }).join("");
+      panel("Comprendre mon score",
+        '<div class="vitalis-deep-score"><strong>' + number(score.overall) + '</strong> / ' +
+        number(score.maximum || 100) + '<small>' + esc(score.method || "") + '</small></div>' +
+        components + '<p class="vitalis-deep-note">' + esc(score.medicalDisclaimer || "") + '</p>');
+    });
+  }
+
+  function nutritionBody() {
+    var n = healthData.nutrition || {}, goals = n.goals || {};
+    var macros = [
+      ["Glucides","carbohydratesGrams","g",0],
+      ["Protéines","proteinGrams","g",0],
+      ["Graisses","fatGrams","g",0],
+      ["Fibre","fiberGrams","g",0],
+      ["Sucre","sugarGrams","g",0],
+      ["Sodium","sodiumMilligrams","mg",0],
+      ["Calories","caloriesKcal","kcal",0]
+    ];
+    var summary = macros.map(function (m) {
+      return '<div class="vitalis-deep-macro"><span>' + m[0] + '</span><b>' +
+        number(n[m[1]],m[3]) + ' ' + m[2] + ' / ' + number(goals[m[1]],m[3]) + ' ' + m[2] + '</b></div>';
+    }).join("");
+    var meals = ((healthData.details || {}).nutrition || []);
+    var mealHtml = meals.map(function (meal) {
+      return '<div class="vitalis-deep-card"><div class="vitalis-deep-top"><b>' + esc(meal.name || "Repas") +
+        '</b><span>' + number(meal.caloriesKcal) + ' kcal</span></div><div class="vitalis-deep-meta">' +
+        'Glucides ' + number(meal.carbohydratesGrams,1) + ' g • Protéines ' + number(meal.proteinGrams,1) +
+        ' g • Graisses ' + number(meal.fatGrams,1) + ' g<br>Fibre ' + number(meal.fiberGrams,1) +
+        ' g • Sucre ' + number(meal.sugarGrams,1) + ' g • Sodium ' + number(meal.sodiumMilligrams) +
+        ' mg<br>Source : <b>' + esc(meal.connector || "Non précisée") + '</b> • ' +
+        esc(date(meal.endTime)) + '</div></div>';
+    }).join("");
+    return '<div class="vitalis-deep-card">' + summary + '</div><h4 class="vitalis-deep-section">Détail des repas</h4>' +
+      (mealHtml || '<div class="vitalis-deep-empty">Aucun repas détaillé reçu. Utilisez le bouton + ou synchronisez une application nutrition.</div>');
+  }
+
+  function recordBody(category, title) {
+    var records = ((healthData.details || {})[category] || []);
+    var html = records.map(function (r) {
+      var lines = [];
+      Object.keys(r).forEach(function (key) {
+        if (["connector","packageName","startTime","endTime","time","title","type","notes"].indexOf(key)>=0) return;
+        var labels = {durationMinutes:"Durée",count:"Pas",averageBpm:"Moyenne",minimumBpm:"Minimum",maximumBpm:"Maximum",sampleCount:"Mesures",litres:"Volume",kilometres:"Distance",kilocalories:"Calories",percentage:"Valeur",kilograms:"Poids"};
+        var units = {durationMinutes:" min",count:"",averageBpm:" bpm",minimumBpm:" bpm",maximumBpm:" bpm",sampleCount:"",litres:" L",kilometres:" km",kilocalories:" kcal",percentage:" %",kilograms:" kg"};
+        lines.push((labels[key] || key) + " : " + number(r[key],key==="litres"||key==="kilometres"||key==="kilograms"?2:0) + (units[key] || ""));
+      });
+      return '<div class="vitalis-deep-card"><div class="vitalis-deep-top"><b>' +
+        esc(r.title || r.type || title) + '</b><span>' + esc(date(r.endTime || r.time)) +
+        '</span></div><div class="vitalis-deep-meta">' + esc(lines.join(" • ")) +
+        (r.notes ? "<br>Notes : " + esc(r.notes) : "") + '<br>Source : <b>' +
+        esc(r.connector || "Non précisée") + '</b></div></div>';
+    }).join("");
+    return html || '<div class="vitalis-deep-empty">Aucun détail reçu pour cette catégorie. Actualisez les données ou vérifiez les autorisations Health Connect.</div>';
+  }
+
+  function showCategory(category) {
+    ensureData(function () {
+      var map = {
+        activity:["Détail des activités","activity"],
+        nutrition:["Détail nutritionnel","nutrition"],
+        sleep:["Détail du sommeil","sleep"],
+        hydration:["Détail de l’hydratation","hydration"],
+        recovery:["Fréquence cardiaque","heartRate"],
+        steps:["Détail des pas","steps"],
+        distance:["Détail des distances","distance"],
+        activeCalories:["Calories actives","activeCalories"],
+        oxygen:["Oxygène sanguin","oxygen"],
+        weight:["Historique du poids","weight"]
+      };
+      var item = map[category] || [category,category];
+      panel(item[0], category === "nutrition" ? nutritionBody() : recordBody(item[1],item[0]));
+    });
+  }
+
+  function contextText(target) {
+    var node = target, best = "";
+    for (var i=0; node && i<7; i++,node=node.parentElement) {
+      var text = norm(node.innerText || node.textContent);
+      if (text.length>best.length && text.length<1800) best=text;
+      if (node.matches && node.matches("article,section,[role='button'],button,a")) break;
+    }
+    return best;
+  }
+
+  document.addEventListener("click", function (event) {
+    var target = event.target;
+    if (!target || !target.closest) return;
+    if (target.closest(".vitalis-deep-overlay")) return;
+    var direct = norm(target.innerText || target.textContent || target.getAttribute && target.getAttribute("aria-label"));
+    if (direct === "+" || /ajouter|enregistrer|scanner/.test(direct)) return;
+    var context = contextText(target);
+    if (/comprendre mon score|understand my score/.test(direct + " " + context)) {
+      event.preventDefault(); event.stopImmediatePropagation(); showScore(); return;
+    }
+    var category = null;
+    if (/score nutritionnel|glucides.*proteines|nutrition.*fibre/.test(context)) category="nutrition";
+    else if (/activite/.test(context) && /pas|min|kcal|score|duree/.test(context)) category="activity";
+    else if (/sommeil/.test(context) && /h|min|score|heure/.test(context)) category="sleep";
+    else if (/(eau|hydratation)/.test(context) && /(ml|litre| l |score)/.test(" "+context+" ")) category="hydration";
+    else if (/frequence cardiaque|bpm|recuperation/.test(context)) category="recovery";
+    else if (/oxygene|spo2/.test(context)) category="oxygen";
+    else if (/poids/.test(context) && /kg/.test(context)) category="weight";
+    if (category) {
+      event.preventDefault(); event.stopImmediatePropagation(); showCategory(category);
+    }
+  }, true);
+
+  window.addEventListener("vitalis-health-data", function (event) {
+    healthData = event.detail || {};
+    if (pendingPanel) {
+      var next = pendingPanel; pendingPanel = null;
+      setTimeout(next,50);
+    }
+  });
+
+  window.VitalisDeepDetails = {
+    explainScore: showScore,
+    open: showCategory,
+    refresh: function () { if (bridge && bridge.refreshHealthData) bridge.refreshHealthData(); }
+  };
+})();
