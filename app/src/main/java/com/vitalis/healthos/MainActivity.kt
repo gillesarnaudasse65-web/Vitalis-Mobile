@@ -471,7 +471,6 @@ class MainActivity : ComponentActivity() {
             putExtra(RecognizerIntent.EXTRA_LANGUAGE, Locale.getDefault().toLanguageTag())
         }
         runCatching {
-            speechRecognizer?.cancel()
             speechRecognizer?.startListening(intent)
             dispatchVoiceEvent("microphone", "starting", true)
         }.onFailure {
