@@ -41,6 +41,7 @@ import androidx.health.connect.client.records.WeightRecord
 import androidx.health.connect.client.request.ReadRecordsRequest
 import androidx.health.connect.client.time.TimeRangeFilter
 import androidx.lifecycle.lifecycleScope
+import androidx.webkit.WebViewAssetLoader
 import kotlinx.coroutines.launch
 import org.json.JSONArray
 import org.json.JSONObject
@@ -52,6 +53,7 @@ class MainActivity : ComponentActivity() {
     private lateinit var webView: WebView
     private lateinit var loading: ProgressBar
     private lateinit var root: LinearLayout
+    private lateinit var assetLoader: WebViewAssetLoader
     private var healthConnectClient: HealthConnectClient? = null
 
     private val healthPermissions = setOf(
@@ -103,6 +105,10 @@ class MainActivity : ComponentActivity() {
         loading = ProgressBar(this).apply { isIndeterminate = true }
         root.addView(loading, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 8))
 
+        assetLoader = WebViewAssetLoader.Builder()
+            .addPathHandler("/assets/", WebViewAssetLoader.AssetsPathHandler(this))
+            .build()
+
         webView = WebView(this).apply {
             settings.javaScriptEnabled = true
             settings.domStorageEnabled = true
@@ -111,13 +117,16 @@ class MainActivity : ComponentActivity() {
             settings.allowContentAccess = false
             settings.mediaPlaybackRequiresUserGesture = false
             settings.mixedContentMode = android.webkit.WebSettings.MIXED_CONTENT_NEVER_ALLOW
-            settings.userAgentString = settings.userAgentString + " VitalisAndroid/3.4"
+            settings.userAgentString = settings.userAgentString + " VitalisAndroid/3.5"
             WebView.setWebContentsDebuggingEnabled(BuildConfig.DEBUG)
             addJavascriptInterface(VitalisAndroidBridge(), "VitalisAndroid")
             webViewClient = object : WebViewClient() {
+                override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest) =
+                    assetLoader.shouldInterceptRequest(request.url)
+
                 override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
                     val uri = request.url
-                    return if (uri.host == VITALIS_HOST) false else {
+                    return if (uri.host == LOCAL_ASSET_HOST || uri.host == VITALIS_HOST) false else {
                         runCatching { startActivity(Intent(Intent.ACTION_VIEW, uri)) }
                         true
                     }
@@ -126,17 +135,17 @@ class MainActivity : ComponentActivity() {
                 override fun onPageFinished(view: WebView, url: String) {
                     loading.visibility = android.view.View.GONE
                     view.evaluateJavascript(
-                        "window.dispatchEvent(new CustomEvent('vitalis-native-ready',{detail:{platform:'android',version:'3.4'}}));",
+                        "window.dispatchEvent(new CustomEvent('vitalis-native-ready',{detail:{platform:'android',version:'3.5'}}));",
                         null
                     )
                     readHealthData()
                 }
 
                 override fun onReceivedError(view: WebView, request: WebResourceRequest, error: WebResourceError) {
-                    if (request.isForMainFrame) showConnectionError()
+                    if (request.isForMainFrame && request.url.host == LOCAL_ASSET_HOST) showConnectionError()
                 }
             }
-            loadUrl(VITALIS_URL)
+            loadUrl(LOCAL_URL)
         }
         root.addView(webView, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
         setContentView(root)
@@ -153,7 +162,7 @@ class MainActivity : ComponentActivity() {
         root.gravity = Gravity.CENTER
         root.setPadding(48, 48, 48, 48)
         root.addView(TextView(this).apply {
-            text = "Vitalis est momentanément inaccessible.\nVérifiez votre connexion puis réessayez."
+            text = "L’interface locale Vitalis n’a pas pu être chargée.\nFermez puis relancez l’application."
             textSize = 18f
             gravity = Gravity.CENTER
             setTextColor(Color.parseColor("#123C31"))
@@ -373,7 +382,8 @@ class MainActivity : ComponentActivity() {
     }
 
     companion object {
+        private const val LOCAL_ASSET_HOST = "appassets.androidplatform.net"
+        private const val LOCAL_URL = "https://$LOCAL_ASSET_HOST/assets/vitalis/index.html"
         private const val VITALIS_HOST = "vitalis-health-os.gillesarnaudasse65.chatgpt.site"
-        private const val VITALIS_URL = "https://$VITALIS_HOST/"
     }
 }
