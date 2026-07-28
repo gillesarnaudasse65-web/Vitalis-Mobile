@@ -11,8 +11,8 @@ android {
         applicationId = "com.vitalis.healthos"
         minSdk = 28
         targetSdk = 35
-        versionCode = 8
-        versionName = "3.4.0-v12-data-sync"
+        versionCode = 9
+        versionName = "3.5.0-offline-first"
     }
 
     buildTypes {
@@ -42,4 +42,5 @@ dependencies {
     implementation("androidx.activity:activity-ktx:1.10.0")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.7")
     implementation("androidx.health.connect:connect-client:1.1.0")
+    implementation("androidx.webkit:webkit:1.13.0")
 }
