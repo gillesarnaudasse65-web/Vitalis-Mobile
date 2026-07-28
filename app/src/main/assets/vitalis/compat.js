@@ -96,17 +96,33 @@
       var entry = record("meal", "Repas photographié", file.name || "Photo du repas");
       var reader = new FileReader();
       reader.onload = function () {
-        var detail = {
-          entry: entry,
-          fileName: file.name,
-          mimeType: file.type,
-          size: file.size,
-          preview: reader.result
+        function complete(preview) {
+          var detail = {
+            entry: entry,
+            fileName: file.name,
+            mimeType: "image/jpeg",
+            size: file.size,
+            preview: preview
+          };
+          window.dispatchEvent(new CustomEvent("vitalis-meal-photo-selected", { detail: detail }));
+          document.dispatchEvent(new CustomEvent("vitalis-meal-photo-selected", { detail: detail }));
+          if (window.VitalisAI && window.VitalisAI.analyzeMeal) {
+            window.VitalisAI.analyzeMeal(detail.preview, entry);
+          }
+          toast("Photo du repas enregistrée.");
+          input.remove();
+        }
+        var image = new Image();
+        image.onload = function () {
+          var scale = Math.min(1, 1280 / Math.max(image.width, image.height));
+          var canvas = document.createElement("canvas");
+          canvas.width = Math.max(1, Math.round(image.width * scale));
+          canvas.height = Math.max(1, Math.round(image.height * scale));
+          canvas.getContext("2d").drawImage(image, 0, 0, canvas.width, canvas.height);
+          complete(canvas.toDataURL("image/jpeg", 0.82));
         };
-        window.dispatchEvent(new CustomEvent("vitalis-meal-photo-selected", { detail: detail }));
-        document.dispatchEvent(new CustomEvent("vitalis-meal-photo-selected", { detail: detail }));
-        toast("Photo du repas enregistrée.");
-        input.remove();
+        image.onerror = function () { complete(reader.result); };
+        image.src = reader.result;
       };
       reader.onerror = function () {
         toast("Photo enregistrée, aperçu indisponible.");
@@ -181,6 +197,11 @@
     if (/ajouter.*eau|hydratation|add.*water/.test(label)) return addWater;
     if (/ajouter.*mesure|enregistrer.*mesure|add.*measure/.test(label)) return addMeasure;
     if (/autoriser.*health connect|connecter.*health connect|health connect.*autoriser/.test(label)) return healthConnect;
+    if (/^coach$|ouvrir.*coach|actualiser.*conseil|coach.*ia|ia.*coach|demander.*kofi|parler.*kofi|analyse.*ia|conseil.*ia|analyse.*sante|bilan.*sante|rapport.*sante|plan.*nutrition|nutrition.*personnalis|analyse.*sommeil|programme.*activite|programme.*sport|plan.*entrainement|analyse.*recuperation|gestion.*stress|recommandation.*personnalis|insight.*sante/.test(label)) {
+      return function () {
+        if (window.VitalisAI) window.VitalisAI.openFeature(label);
+      };
+    }
     return null;
   }
 
@@ -189,7 +210,12 @@
       ? event.target.closest("button,a,[role='button']")
       : null;
     if (!target) return;
-    var action = actionFor(normalize(target.innerText || target.textContent || target.getAttribute("aria-label")));
+    var action = actionFor(normalize(
+      (target.innerText || "") + " " +
+      (target.textContent || "") + " " +
+      (target.getAttribute("aria-label") || "") + " " +
+      (target.getAttribute("title") || "")
+    ));
     if (!action) return;
     event.preventDefault();
     event.stopImmediatePropagation();
@@ -212,7 +238,7 @@
   };
 
   window.dispatchEvent(new CustomEvent("vitalis-native-compat-ready", {
-    detail: { platform: "android", version: "3.8" }
+    detail: { platform: "android", version: "3.9" }
   }));
 
   setTimeout(function () {
@@ -640,5 +666,339 @@
     explainScore: showScore,
     open: showCategory,
     refresh: function () { if (bridge && bridge.refreshHealthData) bridge.refreshHealthData(); }
+  };
+})();
+
+(function () {
+  if (window.__vitalisRealAiCoach) return;
+  window.__vitalisRealAiCoach = true;
+
+  var bridge = window.VitalisAndroid || null;
+  var pending = {};
+  var voiceOn = true;
+  var conversation = [];
+
+  function esc(value) {
+    return String(value == null ? "" : value).replace(/[&<>"']/g, function (c) {
+      return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c];
+    });
+  }
+
+  function styles() {
+    if (document.getElementById("vitalis-ai-style")) return;
+    var style = document.createElement("style");
+    style.id = "vitalis-ai-style";
+    style.textContent =
+      ".vitalis-ai-overlay{position:fixed;z-index:2147483647;inset:0;background:rgba(16,25,22,.62);display:flex;align-items:flex-end;font-family:system-ui,-apple-system,sans-serif}" +
+      ".vitalis-ai-sheet{width:100%;max-height:93vh;overflow:auto;background:#f7f7f7;border-radius:26px 26px 0 0;padding:17px 16px 28px;color:#17221e}" +
+      ".vitalis-ai-head{position:sticky;top:-17px;background:#f7f7f7;z-index:3;display:flex;align-items:center;gap:11px;padding:10px 0 13px}" +
+      ".vitalis-ai-avatar{width:44px;height:44px;border-radius:50%;display:grid;place-items:center;background:#063c30;color:#fff;font-size:24px}.vitalis-ai-title{flex:1}.vitalis-ai-title b{display:block}.vitalis-ai-title small{color:#6e7974}" +
+      ".vitalis-ai-icon{border:0;border-radius:50%;width:37px;height:37px;background:#e5eae7;font-size:18px}.vitalis-ai-chat{min-height:220px;max-height:52vh;overflow:auto;padding:4px 0 10px}" +
+      ".vitalis-ai-message{max-width:88%;padding:11px 13px;border-radius:16px;margin:8px 0;white-space:pre-wrap;line-height:1.46;font-size:14px}.vitalis-ai-message.kofi{background:#fff;border:1px solid #e3e9e6}.vitalis-ai-message.user{background:#063c30;color:#fff;margin-left:auto}.vitalis-ai-message.error{background:#fff1f1;border:1px solid #f1caca;color:#8d2424}" +
+      ".vitalis-ai-compose{position:sticky;bottom:-28px;background:#f7f7f7;padding:10px 0 0;display:grid;grid-template-columns:auto 1fr auto;gap:8px}.vitalis-ai-compose textarea{resize:none;border:1px solid #ccd8d2;border-radius:15px;padding:11px;background:#fff;font:inherit;min-height:46px}.vitalis-ai-send{border:0;border-radius:15px;background:#063c30;color:#fff;padding:0 15px;font-weight:800}.vitalis-ai-send:disabled{opacity:.5}" +
+      ".vitalis-ai-config{background:#fff;border-radius:18px;padding:15px}.vitalis-ai-config h4{margin:0 0 8px}.vitalis-ai-config p{font-size:12px;color:#68746f;line-height:1.45}.vitalis-ai-config input[type=password]{width:100%;box-sizing:border-box;border:1px solid #cad6d0;border-radius:12px;padding:12px;font:inherit}.vitalis-ai-check{display:flex;gap:9px;align-items:flex-start;margin:13px 0;font-size:12px;line-height:1.4}.vitalis-ai-primary{width:100%;border:0;border-radius:13px;padding:13px;background:#063c30;color:#fff;font-weight:800}.vitalis-ai-secondary{width:100%;border:1px solid #cbd7d1;border-radius:13px;padding:11px;background:#fff;color:#18372e;font-weight:700;margin-top:9px}.vitalis-ai-note{font-size:11px;color:#74807a;line-height:1.4;margin-top:9px}";
+    document.head.appendChild(style);
+  }
+
+  function configured() {
+    try {
+      return !!(bridge && bridge.hasOpenAiKey && bridge.hasOpenAiKey() &&
+        bridge.hasAiHealthConsent && bridge.hasAiHealthConsent());
+    } catch (_) { return false; }
+  }
+
+  function healthData() {
+    try { return bridge && bridge.getLastHealthData ? JSON.parse(bridge.getLastHealthData()) : {}; }
+    catch (_) { return {}; }
+  }
+
+  function sourceFor(data, key) {
+    var item = data.attribution && data.attribution[key];
+    return item && item.lastConnector ? item.lastConnector : "source non disponible";
+  }
+
+  function overlay(body) {
+    styles();
+    var old = document.querySelector(".vitalis-ai-overlay");
+    if (old) old.remove();
+    var root = document.createElement("div");
+    root.className = "vitalis-ai-overlay";
+    root.innerHTML = '<div class="vitalis-ai-sheet">' + body + "</div>";
+    document.body.appendChild(root);
+    root.addEventListener("click", function (event) {
+      if (event.target === root) root.remove();
+    });
+    var close = root.querySelector("[data-ai-close]");
+    if (close) close.onclick = function () { root.remove(); };
+    return root;
+  }
+
+  function setup() {
+    var root = overlay(
+      '<div class="vitalis-ai-head"><div class="vitalis-ai-avatar">🧠</div><div class="vitalis-ai-title"><b>Activer Kofi IA</b><small>Configuration sécurisée</small></div><button class="vitalis-ai-icon" data-ai-close>×</button></div>' +
+      '<div class="vitalis-ai-config"><h4>Clé OpenAI dédiée</h4><p>Collez la clé « Vitalis AI » créée sur OpenAI Platform. Elle sera chiffrée par Android Keystore et ne sera jamais ajoutée au code ni à GitHub.</p>' +
+      '<input type="password" autocomplete="off" spellcheck="false" data-ai-key placeholder="sk-proj-…">' +
+      '<label class="vitalis-ai-check"><input type="checkbox" data-ai-consent><span>J’autorise Vitalis à transmettre à OpenAI les données santé nécessaires à mes demandes et les photos de repas que je choisis d’analyser.</span></label>' +
+      '<button class="vitalis-ai-primary" data-ai-save>Activer l’IA</button>' +
+      (bridge && bridge.hasOpenAiKey && bridge.hasOpenAiKey() ? '<button class="vitalis-ai-secondary" data-ai-clear>Désactiver et effacer la clé</button>' : "") +
+      '<p class="vitalis-ai-note">Kofi fournit des conseils de bien-être informatifs et ne remplace pas un professionnel de santé.</p></div>'
+    );
+    root.querySelector("[data-ai-save]").onclick = function () {
+      var key = root.querySelector("[data-ai-key]").value.trim();
+      var consent = root.querySelector("[data-ai-consent]").checked;
+      if (!bridge || !bridge.saveOpenAiKey) {
+        alert("La configuration sécurisée est disponible dans l’application Android Vitalis.");
+        return;
+      }
+      if (!consent) {
+        alert("Votre consentement est nécessaire pour utiliser l’analyse IA des données santé.");
+        return;
+      }
+      if (!bridge.saveOpenAiKey(key)) {
+        alert("La clé semble invalide. Vérifiez la clé Vitalis AI puis réessayez.");
+        return;
+      }
+      bridge.setAiHealthConsent(true);
+      root.remove();
+      openCoach();
+    };
+    var clear = root.querySelector("[data-ai-clear]");
+    if (clear) clear.onclick = function () {
+      if (bridge && bridge.clearOpenAiKey) bridge.clearOpenAiKey();
+      if (bridge && bridge.setAiHealthConsent) bridge.setAiHealthConsent(false);
+      root.remove();
+      alert("Kofi IA est désactivé et la clé locale a été effacée.");
+    };
+  }
+
+  function header() {
+    return '<div class="vitalis-ai-head"><div class="vitalis-ai-avatar">🧠</div><div class="vitalis-ai-title"><b>Kofi, coach IA</b><small>' +
+      (configured() ? "IA en ligne • données Vitalis" : "Mode local actif • IA en ligne à configurer") +
+      '</small></div>' +
+      '<button class="vitalis-ai-icon" data-ai-voice title="Activer ou couper la voix">🔊</button><button class="vitalis-ai-icon" data-ai-settings title="Réglages">⚙</button><button class="vitalis-ai-icon" data-ai-close>×</button></div>';
+  }
+
+  function renderConversation(chat) {
+    if (!conversation.length) {
+      conversation.push({role:"kofi", text:"Bonjour. Je peux analyser votre activité, sommeil, nutrition, hydratation et récupération. Que souhaitez-vous améliorer aujourd’hui ?"});
+    }
+    chat.innerHTML = conversation.map(function (message) {
+      return '<div class="vitalis-ai-message ' + esc(message.role) + '">' + esc(message.text) + "</div>";
+    }).join("");
+    chat.scrollTop = chat.scrollHeight;
+  }
+
+  function localFallback(question) {
+    var data = healthData();
+    var q = String(question || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+    var advice = ["Analyse locale Vitalis — disponible sans connexion IA."];
+    if (!data.syncedAt) {
+      advice.push("Aucune synchronisation récente : appuyez sur Actualiser pour améliorer l’analyse.");
+    }
+    if (/nutrition|repas|glucide|proteine|calorie/.test(q)) {
+      var nutrition = data.nutrition || {};
+      advice.push("Nutrition : " + Number(nutrition.mealCount || 0) + " repas et " + Math.round(Number(nutrition.caloriesKcal || 0)) + " kcal enregistrés.");
+      advice.push("Glucides " + Math.round(Number(nutrition.carbohydratesGrams || 0)) + " g • protéines " + Math.round(Number(nutrition.proteinGrams || 0)) + " g • lipides " + Math.round(Number(nutrition.fatGrams || 0)) + " g • fibres " + Math.round(Number(nutrition.fiberGrams || 0)) + " g.");
+      advice.push("Source nutrition : " + sourceFor(data, "nutrition") + ". Priorité : complétez les repas manquants et privilégiez une assiette équilibrée.");
+    } else if (/sommeil|dormir|fatigue/.test(q)) {
+      var sleepHours = Number(data.sleepMinutes || 0) / 60;
+      advice.push("Sommeil : " + sleepHours.toFixed(1) + " h sur les dernières 24 h. Source : " + sourceFor(data, "sleepMinutes") + ".");
+      advice.push(sleepHours && sleepHours < 7 ? "Priorité : avancez progressivement l’heure du coucher et réduisez les écrans avant le sommeil." : "Priorité : conservez des horaires réguliers et observez la qualité du réveil.");
+    } else if (/activite|sport|entrainement|pas|marche/.test(q)) {
+      advice.push("Activité : " + Math.round(Number(data.steps || 0)) + " pas et " + Math.round(Number(data.exerciseMinutes || 0)) + " minutes. Source : " + sourceFor(data, "exerciseMinutes") + ".");
+      advice.push(Number(data.exerciseMinutes || 0) < 30 ? "Priorité : ajoutez 15 à 30 minutes d’activité adaptée aujourd’hui." : "Priorité : maintenez la régularité et prévoyez une récupération adaptée.");
+    } else if (/hydrat|eau/.test(q)) {
+      advice.push("Hydratation : " + Number(data.hydrationLitres || 0).toFixed(2) + " L. Source : " + sourceFor(data, "hydrationLitres") + ".");
+      advice.push("Priorité : répartissez l’eau sur la journée et ajustez selon la chaleur et l’activité.");
+    } else if (/recuper|coeur|cardiaque|stress/.test(q)) {
+      advice.push("Récupération : fréquence cardiaque moyenne " + (data.averageHeartRate == null ? "non disponible" : Math.round(data.averageHeartRate) + " bpm") + ". Source : " + sourceFor(data, "averageHeartRate") + ".");
+      advice.push("Priorité : privilégiez sommeil, hydratation et récupération douce. Une valeur inhabituelle persistante doit être discutée avec un professionnel de santé.");
+    } else if (/score|bilan|rapport|sante|conseil/.test(q)) {
+      advice.push("Score Vitalis : " + Number(data.score || 0) + "/100.");
+      advice.push("Activité : " + Math.round(Number(data.steps || 0)) + " pas • sommeil : " + (Number(data.sleepMinutes || 0)/60).toFixed(1) + " h • hydratation : " + Number(data.hydrationLitres || 0).toFixed(1) + " L.");
+      advice.push("Priorité : améliorez d’abord la catégorie la moins renseignée ou la plus éloignée de son objectif.");
+    } else {
+      advice.push("Activité : " + Math.round(Number(data.steps || 0)) + " pas • sommeil : " + (Number(data.sleepMinutes || 0)/60).toFixed(1) + " h • hydratation : " + Number(data.hydrationLitres || 0).toFixed(1) + " L.");
+      advice.push("Priorité : choisissez une action mesurable aujourd’hui, puis actualisez les données pour suivre le résultat.");
+    }
+    advice.push("Ces conseils sont informatifs et ne constituent pas un diagnostic médical.");
+    return advice.join("\n");
+  }
+
+  function send(question, chat, sendButton) {
+    var clean = String(question || "").trim();
+    if (!clean) return;
+    conversation.push({role:"user", text:clean});
+    if (!configured()) {
+      var localAnswer = localFallback(clean);
+      conversation.push({role:"kofi", text:localAnswer});
+      renderConversation(chat);
+      if (voiceOn && bridge && bridge.speakText) bridge.speakText(localAnswer, "fr-FR");
+      return;
+    }
+    conversation.push({role:"kofi", text:"Analyse en cours…"});
+    renderConversation(chat);
+    sendButton.disabled = true;
+    var requestId = "coach-" + Date.now();
+    pending[requestId] = {chat:chat, button:sendButton, question:clean, kind:"coach"};
+    try { bridge.askKofi(clean, requestId); }
+    catch (_) {
+      conversation.pop();
+      conversation.push({role:"error", text:localFallback(clean)});
+      renderConversation(chat);
+      sendButton.disabled = false;
+    }
+  }
+
+  function featurePrompt(label) {
+    var value = String(label || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+    if (/nutrition|repas/.test(value)) return "Analyse ma nutrition, mes macronutriments et mes repas. Donne trois améliorations prioritaires et cite les sources disponibles.";
+    if (/sommeil/.test(value)) return "Analyse mon sommeil récent, les données manquantes et propose un plan concret pour améliorer ma récupération.";
+    if (/activite|sport|entrainement/.test(value)) return "Analyse mon activité, mes pas et mes séances, puis propose un programme réaliste pour aujourd’hui.";
+    if (/recuper|stress|cardiaque/.test(value)) return "Analyse mes indicateurs de récupération et de fréquence cardiaque sans poser de diagnostic. Donne trois conseils prudents.";
+    if (/score/.test(value)) return "Explique mon score Vitalis catégorie par catégorie, les sources utilisées et les actions qui peuvent l’améliorer.";
+    if (/bilan|rapport|analyse.*sante|insight/.test(value)) return "Fais un bilan complet de mes données Vitalis : activité, sommeil, nutrition, hydratation et récupération. Cite les connecteurs et priorise trois actions.";
+    if (/actualiser.*conseil/.test(value)) return "Actualise mon conseil du jour à partir des dernières données Vitalis et indique clairement les sources utilisées.";
+    return "";
+  }
+
+  function openCoach(initialPrompt) {
+    var root = overlay(
+      header() +
+      '<div class="vitalis-ai-chat" data-ai-chat></div>' +
+      '<div class="vitalis-ai-compose"><button class="vitalis-ai-icon" data-ai-mic title="Dicter">🎙️</button><textarea rows="2" data-ai-input placeholder="Demandez conseil à Kofi…"></textarea><button class="vitalis-ai-send" data-ai-send>Envoyer</button></div>'
+    );
+    var chat = root.querySelector("[data-ai-chat]");
+    var input = root.querySelector("[data-ai-input]");
+    var sendButton = root.querySelector("[data-ai-send]");
+    renderConversation(chat);
+    root.querySelector("[data-ai-settings]").onclick = setup;
+    var voiceButton = root.querySelector("[data-ai-voice]");
+    var micButton = root.querySelector("[data-ai-mic]");
+    function updateButtons() {
+      var micOn = !!(bridge && bridge.isMicrophoneEnabled && bridge.isMicrophoneEnabled());
+      voiceButton.textContent = voiceOn ? "🔊" : "🔇";
+      voiceButton.setAttribute("aria-pressed", voiceOn ? "true" : "false");
+      micButton.textContent = micOn ? "⏹" : "🎙️";
+      micButton.setAttribute("aria-pressed", micOn ? "true" : "false");
+      micButton.title = micOn ? "Couper le micro" : "Activer le micro";
+    }
+    voiceButton.onclick = function () {
+      voiceOn = !voiceOn;
+      if (!voiceOn && bridge && bridge.stopSpeaking) bridge.stopSpeaking();
+      updateButtons();
+    };
+    micButton.onclick = function () {
+      if (!bridge) return;
+      var micOn = !!(bridge.isMicrophoneEnabled && bridge.isMicrophoneEnabled());
+      if (micOn && bridge.stopVoiceInput) bridge.stopVoiceInput();
+      else if (bridge.startVoiceInput) bridge.startVoiceInput();
+      setTimeout(updateButtons, 120);
+    };
+    updateButtons();
+    sendButton.onclick = function () {
+      var value = input.value;
+      input.value = "";
+      send(value, chat, sendButton);
+    };
+    input.addEventListener("keydown", function (event) {
+      if (event.key === "Enter" && !event.shiftKey) {
+        event.preventDefault();
+        sendButton.click();
+      }
+    });
+    root.__vitalisAiInput = input;
+    if (initialPrompt) setTimeout(function () { send(initialPrompt, chat, sendButton); }, 80);
+  }
+
+  function openFeature(label) {
+    openCoach(featurePrompt(label));
+  }
+
+  function analyzeMeal(imageDataUrl, entry) {
+    if (!configured()) {
+      showMealResult(
+        "La photo est enregistrée. L’analyse visuelle en ligne nécessite la clé Vitalis AI. Le reste du coach demeure opérationnel en mode local ; ouvrez les réglages IA pour activer l’estimation des aliments et macronutriments.",
+        true
+      );
+      return;
+    }
+    var requestId = "meal-" + Date.now();
+    pending[requestId] = {kind:"meal", entry:entry};
+    try { bridge.analyzeMealImage(imageDataUrl, requestId); }
+    catch (_) { showMealResult(localFallback("Analyse de ce repas"), true); }
+  }
+
+  function showMealResult(text, fallback) {
+    var root = overlay(
+      '<div class="vitalis-ai-head"><div class="vitalis-ai-avatar">🍽️</div><div class="vitalis-ai-title"><b>Analyse IA du repas</b><small>' +
+      (fallback ? "Estimation locale" : "Kofi Vision") +
+      '</small></div><button class="vitalis-ai-icon" data-ai-close>×</button></div>' +
+      '<div class="vitalis-ai-message kofi" style="max-width:none">' + esc(text) + "</div>" +
+      '<p class="vitalis-ai-note">Les valeurs issues d’une photo sont des estimations. Corrigez-les si nécessaire avant de les utiliser dans votre suivi.</p>'
+    );
+    if (voiceOn && bridge && bridge.speakText) bridge.speakText(text, "fr-FR");
+    return root;
+  }
+
+  window.addEventListener("vitalis-ai-response", function (event) {
+    var detail = event.detail || {};
+    var task = pending[detail.requestId];
+    if (!task) return;
+    delete pending[detail.requestId];
+    if (task.kind === "meal") {
+      var mealText = detail.ok ? detail.text : localFallback("Analyse de ce repas");
+      showMealResult(mealText, !detail.ok);
+      window.dispatchEvent(new CustomEvent("vitalis-meal-ai-analysis", {
+        detail: {entry:task.entry, text:mealText, online:!!detail.ok}
+      }));
+      return;
+    }
+    if (task.kind === "coach") {
+      conversation.pop();
+      var answer = detail.ok ? detail.text : localFallback(task.question);
+      conversation.push({role:detail.ok ? "kofi" : "error", text:answer});
+      renderConversation(task.chat);
+      task.button.disabled = false;
+      if (voiceOn && detail.ok && bridge && bridge.speakText) bridge.speakText(answer, "fr-FR");
+    }
+  });
+
+  window.addEventListener("vitalis-voice-input", function (event) {
+    var detail = event.detail || {};
+    if (detail.partial || !detail.text) return;
+    var root = document.querySelector(".vitalis-ai-overlay");
+    var input = root && root.__vitalisAiInput;
+    if (input) {
+      input.value = detail.text;
+      input.focus();
+    }
+    if (bridge && bridge.stopVoiceInput) bridge.stopVoiceInput();
+  });
+
+  window.addEventListener("vitalis-voice-state", function (event) {
+    var detail = event.detail || {};
+    var root = document.querySelector(".vitalis-ai-overlay");
+    var mic = root && root.querySelector("[data-ai-mic]");
+    if (mic) {
+      mic.textContent = detail.microphoneEnabled ? "⏹" : "🎙️";
+      mic.setAttribute("aria-pressed", detail.microphoneEnabled ? "true" : "false");
+      mic.title = detail.microphoneEnabled ? "Couper le micro" : "Activer le micro";
+    }
+  });
+
+  window.VitalisAI = {
+    open: openCoach,
+    openFeature: openFeature,
+    configure: setup,
+    analyzeMeal: analyzeMeal,
+    setVoiceEnabled: function (enabled) {
+      voiceOn = !!enabled;
+      if (!voiceOn && bridge && bridge.stopSpeaking) bridge.stopSpeaking();
+    },
+    clearKey: function () {
+      if (bridge && bridge.clearOpenAiKey) bridge.clearOpenAiKey();
+      if (bridge && bridge.setAiHealthConsent) bridge.setAiHealthConsent(false);
+    }
   };
 })();
