@@ -111,7 +111,7 @@ class MainActivity : ComponentActivity() {
             settings.allowContentAccess = false
             settings.mediaPlaybackRequiresUserGesture = false
             settings.mixedContentMode = android.webkit.WebSettings.MIXED_CONTENT_NEVER_ALLOW
-            settings.userAgentString = settings.userAgentString + " VitalisAndroid/3.3"
+            settings.userAgentString = settings.userAgentString + " VitalisAndroid/3.4"
             WebView.setWebContentsDebuggingEnabled(BuildConfig.DEBUG)
             addJavascriptInterface(VitalisAndroidBridge(), "VitalisAndroid")
             webViewClient = object : WebViewClient() {
@@ -126,7 +126,7 @@ class MainActivity : ComponentActivity() {
                 override fun onPageFinished(view: WebView, url: String) {
                     loading.visibility = android.view.View.GONE
                     view.evaluateJavascript(
-                        "window.dispatchEvent(new CustomEvent('vitalis-native-ready',{detail:{platform:'android',version:'3.3'}}));",
+                        "window.dispatchEvent(new CustomEvent('vitalis-native-ready',{detail:{platform:'android',version:'3.4'}}));",
                         null
                     )
                     readHealthData()
@@ -221,24 +221,52 @@ class MainActivity : ComponentActivity() {
             runCatching {
                 val now = Instant.now()
                 val filter = TimeRangeFilter.between(now.minus(Duration.ofDays(30)), now)
-                val steps = client.readRecords(ReadRecordsRequest(StepsRecord::class, filter)).records
-                val sleep = client.readRecords(ReadRecordsRequest(SleepSessionRecord::class, filter)).records
-                val exercise = client.readRecords(ReadRecordsRequest(ExerciseSessionRecord::class, filter)).records
-                val heart = client.readRecords(ReadRecordsRequest(HeartRateRecord::class, filter)).records
-                val hydration = client.readRecords(ReadRecordsRequest(HydrationRecord::class, filter)).records
+                val steps = if (HealthPermission.getReadPermission(StepsRecord::class) in granted)
+                    client.readRecords(ReadRecordsRequest(StepsRecord::class, filter)).records else emptyList()
+                val sleep = if (HealthPermission.getReadPermission(SleepSessionRecord::class) in granted)
+                    client.readRecords(ReadRecordsRequest(SleepSessionRecord::class, filter)).records else emptyList()
+                val exercise = if (HealthPermission.getReadPermission(ExerciseSessionRecord::class) in granted)
+                    client.readRecords(ReadRecordsRequest(ExerciseSessionRecord::class, filter)).records else emptyList()
+                val heart = if (HealthPermission.getReadPermission(HeartRateRecord::class) in granted)
+                    client.readRecords(ReadRecordsRequest(HeartRateRecord::class, filter)).records else emptyList()
+                val hydration = if (HealthPermission.getReadPermission(HydrationRecord::class) in granted)
+                    client.readRecords(ReadRecordsRequest(HydrationRecord::class, filter)).records else emptyList()
+                val distance = if (HealthPermission.getReadPermission(DistanceRecord::class) in granted)
+                    client.readRecords(ReadRecordsRequest(DistanceRecord::class, filter)).records else emptyList()
+                val activeCalories = if (HealthPermission.getReadPermission(ActiveCaloriesBurnedRecord::class) in granted)
+                    client.readRecords(ReadRecordsRequest(ActiveCaloriesBurnedRecord::class, filter)).records else emptyList()
+                val oxygen = if (HealthPermission.getReadPermission(OxygenSaturationRecord::class) in granted)
+                    client.readRecords(ReadRecordsRequest(OxygenSaturationRecord::class, filter)).records else emptyList()
+                val weight = if (HealthPermission.getReadPermission(WeightRecord::class) in granted)
+                    client.readRecords(ReadRecordsRequest(WeightRecord::class, filter)).records else emptyList()
 
                 val sources = (steps.map { it.metadata.dataOrigin.packageName } +
                     sleep.map { it.metadata.dataOrigin.packageName } +
                     exercise.map { it.metadata.dataOrigin.packageName } +
                     heart.map { it.metadata.dataOrigin.packageName } +
-                    hydration.map { it.metadata.dataOrigin.packageName }).distinct()
+                    hydration.map { it.metadata.dataOrigin.packageName } +
+                    distance.map { it.metadata.dataOrigin.packageName } +
+                    activeCalories.map { it.metadata.dataOrigin.packageName } +
+                    oxygen.map { it.metadata.dataOrigin.packageName } +
+                    weight.map { it.metadata.dataOrigin.packageName }).distinct()
 
                 val last24h = TimeRangeFilter.between(now.minus(Duration.ofHours(24)), now)
-                val steps24 = client.readRecords(ReadRecordsRequest(StepsRecord::class, last24h)).records
-                val sleep24 = client.readRecords(ReadRecordsRequest(SleepSessionRecord::class, last24h)).records
-                val exercise24 = client.readRecords(ReadRecordsRequest(ExerciseSessionRecord::class, last24h)).records
-                val heart24 = client.readRecords(ReadRecordsRequest(HeartRateRecord::class, last24h)).records
-                val hydration24 = client.readRecords(ReadRecordsRequest(HydrationRecord::class, last24h)).records
+                val steps24 = if (steps.isNotEmpty())
+                    client.readRecords(ReadRecordsRequest(StepsRecord::class, last24h)).records else emptyList()
+                val sleep24 = if (sleep.isNotEmpty())
+                    client.readRecords(ReadRecordsRequest(SleepSessionRecord::class, last24h)).records else emptyList()
+                val exercise24 = if (exercise.isNotEmpty())
+                    client.readRecords(ReadRecordsRequest(ExerciseSessionRecord::class, last24h)).records else emptyList()
+                val heart24 = if (heart.isNotEmpty())
+                    client.readRecords(ReadRecordsRequest(HeartRateRecord::class, last24h)).records else emptyList()
+                val hydration24 = if (hydration.isNotEmpty())
+                    client.readRecords(ReadRecordsRequest(HydrationRecord::class, last24h)).records else emptyList()
+                val distance24 = if (distance.isNotEmpty())
+                    client.readRecords(ReadRecordsRequest(DistanceRecord::class, last24h)).records else emptyList()
+                val activeCalories24 = if (activeCalories.isNotEmpty())
+                    client.readRecords(ReadRecordsRequest(ActiveCaloriesBurnedRecord::class, last24h)).records else emptyList()
+                val oxygen24 = if (oxygen.isNotEmpty())
+                    client.readRecords(ReadRecordsRequest(OxygenSaturationRecord::class, last24h)).records else emptyList()
 
                 val payload = JSONObject().apply {
                     put("periodHours", 24)
@@ -248,6 +276,10 @@ class MainActivity : ComponentActivity() {
                     val samples = heart24.flatMap { it.samples }
                     put("averageHeartRate", if (samples.isEmpty()) JSONObject.NULL else samples.map { it.beatsPerMinute }.average().roundToInt())
                     put("hydrationLitres", hydration24.sumOf { it.volume.inLiters })
+                    put("distanceKm", distance24.sumOf { it.distance.inKilometers })
+                    put("activeCalories", activeCalories24.sumOf { it.energy.inKilocalories })
+                    put("oxygenPercent", oxygen24.lastOrNull()?.percentage?.value ?: JSONObject.NULL)
+                    put("weightKg", weight.lastOrNull()?.weight?.inKilograms ?: JSONObject.NULL)
                     put("sources", JSONArray(sources))
                     put("syncedAt", now.toString())
                 }
