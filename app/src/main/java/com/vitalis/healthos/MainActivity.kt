@@ -86,6 +86,7 @@ class MainActivity : ComponentActivity() {
     private var filePathCallback: ValueCallback<Array<Uri>>? = null
     private var fallbackLoaded = false
     private var remotePageFinished = false
+    private var remoteRetryCount = 0
     private var healthConnectClient: HealthConnectClient? = null
     private var lastSourcePackages: List<String> = emptyList()
     private var lastHealthPayload = JSONObject()
@@ -180,6 +181,7 @@ class MainActivity : ComponentActivity() {
             settings.allowContentAccess = false
             settings.mediaPlaybackRequiresUserGesture = false
             settings.mixedContentMode = android.webkit.WebSettings.MIXED_CONTENT_NEVER_ALLOW
+            settings.cacheMode = android.webkit.WebSettings.LOAD_DEFAULT
             settings.userAgentString = settings.userAgentString + " VitalisAndroid/3.9"
             WebView.setWebContentsDebuggingEnabled(BuildConfig.DEBUG)
             addJavascriptInterface(VitalisAndroidBridge(), "VitalisAndroid")
@@ -215,7 +217,10 @@ class MainActivity : ComponentActivity() {
                 override fun onPageFinished(view: WebView, url: String) {
                     loading.visibility = android.view.View.GONE
                     val host = requestHost(url)
-                    if (host == VITALIS_HOST) remotePageFinished = true
+                    if (host == VITALIS_HOST) {
+                        remotePageFinished = true
+                        remoteRetryCount = 0
+                    }
                     if (host == VITALIS_HOST || host == LOCAL_ASSET_HOST) injectClassicCompatibility(view)
                     view.evaluateJavascript(
                         "window.dispatchEvent(new CustomEvent('vitalis-native-ready',{detail:{platform:'android',version:'3.9'}}));",
@@ -226,7 +231,7 @@ class MainActivity : ComponentActivity() {
 
                 override fun onReceivedError(view: WebView, request: WebResourceRequest, error: WebResourceError) {
                     if (!request.isForMainFrame) return
-                    if (request.url.host == VITALIS_HOST) loadOfflineFallback()
+                    if (request.url.host == VITALIS_HOST) retryClassicInterfaceOrFallback()
                     else if (request.url.host == LOCAL_ASSET_HOST) showConnectionError()
                 }
 
@@ -236,7 +241,7 @@ class MainActivity : ComponentActivity() {
                     errorResponse: WebResourceResponse
                 ) {
                     if (request.isForMainFrame && request.url.host == VITALIS_HOST && errorResponse.statusCode >= 400) {
-                        loadOfflineFallback()
+                        retryClassicInterfaceOrFallback()
                     }
                 }
             }
@@ -245,9 +250,7 @@ class MainActivity : ComponentActivity() {
         root.addView(webView, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
         setContentView(root)
 
-        Handler(Looper.getMainLooper()).postDelayed({
-            if (!remotePageFinished && !fallbackLoaded && ::webView.isInitialized) loadOfflineFallback()
-        }, REMOTE_LOAD_TIMEOUT_MS)
+        scheduleClassicInterfaceTimeout()
 
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
@@ -271,6 +274,31 @@ class MainActivity : ComponentActivity() {
         loading.visibility = android.view.View.GONE
         webView.stopLoading()
         webView.loadUrl(LOCAL_URL)
+    }
+
+    private fun scheduleClassicInterfaceTimeout() {
+        Handler(Looper.getMainLooper()).postDelayed({
+            if (!remotePageFinished && !fallbackLoaded && ::webView.isInitialized) {
+                retryClassicInterfaceOrFallback()
+            }
+        }, REMOTE_LOAD_TIMEOUT_MS)
+    }
+
+    private fun retryClassicInterfaceOrFallback() {
+        if (remotePageFinished || fallbackLoaded || !::webView.isInitialized) return
+        if (remoteRetryCount < MAX_REMOTE_RETRIES) {
+            remoteRetryCount += 1
+            Handler(Looper.getMainLooper()).postDelayed({
+                if (!remotePageFinished && !fallbackLoaded && ::webView.isInitialized) {
+                    loading.visibility = android.view.View.VISIBLE
+                    webView.stopLoading()
+                    webView.loadUrl(VITALIS_URL)
+                    scheduleClassicInterfaceTimeout()
+                }
+            }, REMOTE_RETRY_DELAY_MS)
+        } else {
+            loadOfflineFallback()
+        }
     }
 
     override fun onDestroy() {
@@ -423,8 +451,10 @@ class MainActivity : ComponentActivity() {
             runOnUiThread {
                 fallbackLoaded = false
                 remotePageFinished = false
+                remoteRetryCount = 0
                 loading.visibility = android.view.View.VISIBLE
                 webView.loadUrl(VITALIS_URL)
+                scheduleClassicInterfaceTimeout()
             }
         }
 
@@ -1148,7 +1178,9 @@ class MainActivity : ComponentActivity() {
         private const val LOCAL_URL = "https://$LOCAL_ASSET_HOST/assets/vitalis/index.html"
         private const val VITALIS_HOST = "vitalis-health-os.gillesarnaudasse65.chatgpt.site"
         private const val VITALIS_URL = "https://$VITALIS_HOST/"
-        private const val REMOTE_LOAD_TIMEOUT_MS = 12_000L
+        private const val REMOTE_LOAD_TIMEOUT_MS = 30_000L
+        private const val REMOTE_RETRY_DELAY_MS = 2_000L
+        private const val MAX_REMOTE_RETRIES = 2
         private const val MAX_SPEECH_TEXT_LENGTH = 8_000
         private const val MAX_AI_PROMPT_LENGTH = 4_000
         private const val MAX_IMAGE_DATA_URL_LENGTH = 6_000_000
