@@ -11,8 +11,8 @@ android {
         applicationId = "com.vitalis.healthos"
         minSdk = 28
         targetSdk = 35
-        versionCode = 11
-        versionName = "3.7.0-connectors-voice"
+        versionCode = 12
+        versionName = "3.8.0-deep-health-details"
     }
 
     buildTypes {
