@@ -423,7 +423,7 @@ class MainActivity : ComponentActivity() {
         if (availability == TextToSpeech.LANG_MISSING_DATA || availability == TextToSpeech.LANG_NOT_SUPPORTED) engine.language = Locale.FRENCH
         engine.setSpeechRate(0.96f)
         engine.setPitch(1.0f)
-        engine.speak(cleanText, TextToSpeech.QUEUE_FLUSH, null, "vitalis-\${System.currentTimeMillis()}")
+        engine.speak(cleanText, TextToSpeech.QUEUE_FLUSH, null, "vitalis-${System.currentTimeMillis()}")
     }
 
     private fun startMicrophone() {
@@ -514,7 +514,7 @@ class MainActivity : ComponentActivity() {
     private fun dispatchWebEvent(name: String, payload: JSONObject) {
         if (!::webView.isInitialized) return
         runOnUiThread {
-            webView.evaluateJavascript("window.dispatchEvent(new CustomEvent('\${name}',{detail:$payload}));", null)
+            webView.evaluateJavascript("window.dispatchEvent(new CustomEvent('${name}',{detail:$payload}));", null)
         }
     }
 
@@ -545,7 +545,8 @@ class MainActivity : ComponentActivity() {
                 val activeCalories = if (HealthPermission.getReadPermission(ActiveCaloriesBurnedRecord::class) in granted) client.readRecords(ReadRecordsRequest(ActiveCaloriesBurnedRecord::class, filter)).records else emptyList()
                 val oxygen = if (HealthPermission.getReadPermission(OxygenSaturationRecord::class) in granted) client.readRecords(ReadRecordsRequest(OxygenSaturationRecord::class, filter)).records else emptyList()
                 val weight = if (HealthPermission.getReadPermission(WeightRecord::class) in granted) client.readRecords(ReadRecordsRequest(WeightRecord::class, filter)).records else emptyList()
-                val sources = (steps.map { it.metadata.dataOrigin.packageName } + sleep.map { it.metadata.dataOrigin.packageName } + exercise.map { it.metadata.dataOrigin.packageName } + heart.map { it.metadata.dataOrigin.packageName } + hydration.map { it.metadata.dataOrigin.packageName } + distance.map { it.metadata.dataOrigin.packageName } + activeCalories.map { it.metadata.dataOrigin.packageName } + oxygen.map { it.metadata.dataOrigin.packageName } + weight.map { it.metadata.dataOrigin.packageName }).filter { it.isNotBlank() }.distinct()
+                val nutrition = if (HealthPermission.getReadPermission(NutritionRecord::class) in granted) client.readRecords(ReadRecordsRequest(NutritionRecord::class, filter)).records else emptyList()
+                val sources = (steps.map { it.metadata.dataOrigin.packageName } + sleep.map { it.metadata.dataOrigin.packageName } + exercise.map { it.metadata.dataOrigin.packageName } + heart.map { it.metadata.dataOrigin.packageName } + hydration.map { it.metadata.dataOrigin.packageName } + distance.map { it.metadata.dataOrigin.packageName } + activeCalories.map { it.metadata.dataOrigin.packageName } + oxygen.map { it.metadata.dataOrigin.packageName } + weight.map { it.metadata.dataOrigin.packageName } + nutrition.map { it.metadata.dataOrigin.packageName }).filter { it.isNotBlank() }.distinct()
                 val last24h = TimeRangeFilter.between(now.minus(Duration.ofHours(24)), now)
                 val steps24 = if (steps.isNotEmpty()) client.readRecords(ReadRecordsRequest(StepsRecord::class, last24h)).records else emptyList()
                 val sleep24 = if (sleep.isNotEmpty()) client.readRecords(ReadRecordsRequest(SleepSessionRecord::class, last24h)).records else emptyList()
@@ -555,6 +556,7 @@ class MainActivity : ComponentActivity() {
                 val distance24 = if (distance.isNotEmpty()) client.readRecords(ReadRecordsRequest(DistanceRecord::class, last24h)).records else emptyList()
                 val activeCalories24 = if (activeCalories.isNotEmpty()) client.readRecords(ReadRecordsRequest(ActiveCaloriesBurnedRecord::class, last24h)).records else emptyList()
                 val oxygen24 = if (oxygen.isNotEmpty()) client.readRecords(ReadRecordsRequest(OxygenSaturationRecord::class, last24h)).records else emptyList()
+                val nutrition24 = if (nutrition.isNotEmpty()) client.readRecords(ReadRecordsRequest(NutritionRecord::class, last24h)).records else emptyList()
                 val attributions = JSONObject().apply {
                     put("steps", attribution(steps24.map { it.metadata.dataOrigin.packageName to it.endTime }))
                     put("sleepMinutes", attribution(sleep24.map { it.metadata.dataOrigin.packageName to it.endTime }))
@@ -565,19 +567,35 @@ class MainActivity : ComponentActivity() {
                     put("activeCalories", attribution(activeCalories24.map { it.metadata.dataOrigin.packageName to it.endTime }))
                     put("oxygenPercent", attribution(oxygen24.map { it.metadata.dataOrigin.packageName to it.time }))
                     put("weightKg", attribution(weight.map { it.metadata.dataOrigin.packageName to it.time }))
+                    put("nutrition", attribution(nutrition24.map { it.metadata.dataOrigin.packageName to it.endTime }))
                 }
+                val samples = heart24.flatMap { it.samples }
+                val averageHeartRate = if (samples.isEmpty()) null else samples.map { it.beatsPerMinute }.average().roundToInt()
+                val nutritionSummary = buildNutritionSummary(nutrition24)
+                val details = buildDetailsPayload(steps, sleep, exercise, heart, hydration, distance, activeCalories, oxygen, weight, nutrition)
+                val scoreBreakdown = buildScoreBreakdown(
+                    steps24.sumOf { it.count },
+                    sleep24.sumOf { Duration.between(it.startTime, it.endTime).toMinutes() },
+                    exercise24.sumOf { Duration.between(it.startTime, it.endTime).toMinutes() },
+                    hydration24.sumOf { it.volume.inLiters },
+                    averageHeartRate,
+                    nutritionSummary
+                )
                 val payload = JSONObject().apply {
                     put("periodHours", 24)
                     put("steps", steps24.sumOf { it.count })
                     put("sleepMinutes", sleep24.sumOf { Duration.between(it.startTime, it.endTime).toMinutes() })
                     put("exerciseMinutes", exercise24.sumOf { Duration.between(it.startTime, it.endTime).toMinutes() })
-                    val samples = heart24.flatMap { it.samples }
-                    put("averageHeartRate", if (samples.isEmpty()) JSONObject.NULL else samples.map { it.beatsPerMinute }.average().roundToInt())
+                    put("averageHeartRate", averageHeartRate ?: JSONObject.NULL)
                     put("hydrationLitres", hydration24.sumOf { it.volume.inLiters })
                     put("distanceKm", distance24.sumOf { it.distance.inKilometers })
                     put("activeCalories", activeCalories24.sumOf { it.energy.inKilocalories })
                     put("oxygenPercent", oxygen24.maxByOrNull { it.time }?.percentage?.value ?: JSONObject.NULL)
                     put("weightKg", weight.maxByOrNull { it.time }?.weight?.inKilograms ?: JSONObject.NULL)
+                    put("nutrition", nutritionSummary)
+                    put("details", details)
+                    put("score", scoreBreakdown.getInt("overall"))
+                    put("scoreBreakdown", scoreBreakdown)
                     put("attribution", attributions)
                     put("sources", JSONArray(sources))
                     put("connectorCount", sources.size)
@@ -593,6 +611,207 @@ class MainActivity : ComponentActivity() {
                 notifyWeb(false, "sync_error", error.message ?: "Synchronisation impossible")
             }
         }
+    }
+
+    private fun buildNutritionSummary(records: List<NutritionRecord>): JSONObject {
+        val goals = JSONObject().apply {
+            put("caloriesKcal", 2093.0)
+            put("carbohydratesGrams", 183.0)
+            put("proteinGrams", 209.0)
+            put("fatGrams", 58.0)
+            put("fiberGrams", 25.0)
+            put("sugarGrams", 25.0)
+            put("sodiumMilligrams", 2300.0)
+        }
+        return JSONObject().apply {
+            put("mealCount", records.size)
+            put("caloriesKcal", records.sumOf { it.energy?.inKilocalories ?: 0.0 })
+            put("carbohydratesGrams", records.sumOf { it.totalCarbohydrate?.inGrams ?: 0.0 })
+            put("proteinGrams", records.sumOf { it.protein?.inGrams ?: 0.0 })
+            put("fatGrams", records.sumOf { it.totalFat?.inGrams ?: 0.0 })
+            put("fiberGrams", records.sumOf { it.dietaryFiber?.inGrams ?: 0.0 })
+            put("sugarGrams", records.sumOf { it.sugar?.inGrams ?: 0.0 })
+            put("sodiumMilligrams", records.sumOf { (it.sodium?.inGrams ?: 0.0) * 1000.0 })
+            put("goals", goals)
+        }
+    }
+
+    private fun buildDetailsPayload(
+        steps: List<StepsRecord>,
+        sleep: List<SleepSessionRecord>,
+        exercise: List<ExerciseSessionRecord>,
+        heart: List<HeartRateRecord>,
+        hydration: List<HydrationRecord>,
+        distance: List<DistanceRecord>,
+        activeCalories: List<ActiveCaloriesBurnedRecord>,
+        oxygen: List<OxygenSaturationRecord>,
+        weight: List<WeightRecord>,
+        nutrition: List<NutritionRecord>
+    ): JSONObject = JSONObject().apply {
+        put("activity", JSONArray(exercise.sortedByDescending { it.endTime }.take(50).map { record ->
+            JSONObject().apply {
+                put("title", record.title ?: exerciseTypeLabel(record.exerciseType))
+                put("type", exerciseTypeLabel(record.exerciseType))
+                put("typeCode", record.exerciseType)
+                put("notes", record.notes ?: JSONObject.NULL)
+                put("durationMinutes", Duration.between(record.startTime, record.endTime).toMinutes())
+                put("startTime", record.startTime.toString())
+                put("endTime", record.endTime.toString())
+                put("connector", sourceLabel(record.metadata.dataOrigin.packageName))
+                put("packageName", record.metadata.dataOrigin.packageName)
+            }
+        }))
+        put("nutrition", JSONArray(nutrition.sortedByDescending { it.endTime }.take(50).map { record ->
+            JSONObject().apply {
+                put("name", record.name ?: "Repas")
+                put("mealType", record.mealType)
+                put("caloriesKcal", record.energy?.inKilocalories ?: JSONObject.NULL)
+                put("carbohydratesGrams", record.totalCarbohydrate?.inGrams ?: JSONObject.NULL)
+                put("proteinGrams", record.protein?.inGrams ?: JSONObject.NULL)
+                put("fatGrams", record.totalFat?.inGrams ?: JSONObject.NULL)
+                put("saturatedFatGrams", record.saturatedFat?.inGrams ?: JSONObject.NULL)
+                put("fiberGrams", record.dietaryFiber?.inGrams ?: JSONObject.NULL)
+                put("sugarGrams", record.sugar?.inGrams ?: JSONObject.NULL)
+                put("sodiumMilligrams", record.sodium?.inGrams?.times(1000.0) ?: JSONObject.NULL)
+                put("startTime", record.startTime.toString())
+                put("endTime", record.endTime.toString())
+                put("connector", sourceLabel(record.metadata.dataOrigin.packageName))
+                put("packageName", record.metadata.dataOrigin.packageName)
+            }
+        }))
+        put("sleep", JSONArray(sleep.sortedByDescending { it.endTime }.take(50).map { record ->
+            JSONObject().apply {
+                put("durationMinutes", Duration.between(record.startTime, record.endTime).toMinutes())
+                put("startTime", record.startTime.toString())
+                put("endTime", record.endTime.toString())
+                put("connector", sourceLabel(record.metadata.dataOrigin.packageName))
+            }
+        }))
+        put("hydration", JSONArray(hydration.sortedByDescending { it.time }.take(50).map { record ->
+            JSONObject().apply {
+                put("litres", record.volume.inLiters)
+                put("time", record.time.toString())
+                put("connector", sourceLabel(record.metadata.dataOrigin.packageName))
+            }
+        }))
+        put("steps", JSONArray(steps.sortedByDescending { it.endTime }.take(50).map { record ->
+            JSONObject().apply {
+                put("count", record.count)
+                put("startTime", record.startTime.toString())
+                put("endTime", record.endTime.toString())
+                put("connector", sourceLabel(record.metadata.dataOrigin.packageName))
+            }
+        }))
+        put("heartRate", JSONArray(heart.sortedByDescending { it.endTime }.take(50).map { record ->
+            val values = record.samples.map { it.beatsPerMinute }
+            JSONObject().apply {
+                put("averageBpm", if (values.isEmpty()) JSONObject.NULL else values.average().roundToInt())
+                put("minimumBpm", values.minOrNull() ?: JSONObject.NULL)
+                put("maximumBpm", values.maxOrNull() ?: JSONObject.NULL)
+                put("sampleCount", values.size)
+                put("startTime", record.startTime.toString())
+                put("endTime", record.endTime.toString())
+                put("connector", sourceLabel(record.metadata.dataOrigin.packageName))
+            }
+        }))
+        put("distance", JSONArray(distance.sortedByDescending { it.endTime }.take(50).map { record ->
+            JSONObject().apply {
+                put("kilometres", record.distance.inKilometers)
+                put("startTime", record.startTime.toString())
+                put("endTime", record.endTime.toString())
+                put("connector", sourceLabel(record.metadata.dataOrigin.packageName))
+            }
+        }))
+        put("activeCalories", JSONArray(activeCalories.sortedByDescending { it.endTime }.take(50).map { record ->
+            JSONObject().apply {
+                put("kilocalories", record.energy.inKilocalories)
+                put("startTime", record.startTime.toString())
+                put("endTime", record.endTime.toString())
+                put("connector", sourceLabel(record.metadata.dataOrigin.packageName))
+            }
+        }))
+        put("oxygen", JSONArray(oxygen.sortedByDescending { it.time }.take(50).map { record ->
+            JSONObject().apply {
+                put("percentage", record.percentage.value)
+                put("time", record.time.toString())
+                put("connector", sourceLabel(record.metadata.dataOrigin.packageName))
+            }
+        }))
+        put("weight", JSONArray(weight.sortedByDescending { it.time }.take(50).map { record ->
+            JSONObject().apply {
+                put("kilograms", record.weight.inKilograms)
+                put("time", record.time.toString())
+                put("connector", sourceLabel(record.metadata.dataOrigin.packageName))
+            }
+        }))
+    }
+
+    private fun buildScoreBreakdown(
+        steps: Long,
+        sleepMinutes: Long,
+        exerciseMinutes: Long,
+        hydrationLitres: Double,
+        averageHeartRate: Int?,
+        nutrition: JSONObject
+    ): JSONObject {
+        val components = JSONArray()
+        fun add(key: String, label: String, score: Int, available: Boolean, current: String, target: String, explanation: String) {
+            components.put(JSONObject().apply {
+                put("key", key)
+                put("label", label)
+                put("earnedPoints", if (available) (score.coerceIn(0, 100) / 5.0).roundToInt() else 0)
+                put("maxPoints", 20)
+                put("percentage", if (available) score.coerceIn(0, 100) else 0)
+                put("available", available)
+                put("current", current)
+                put("target", target)
+                put("explanation", explanation)
+            })
+        }
+        val activityAvailable = steps > 0 || exerciseMinutes > 0
+        val activityScore = (((steps / 8000.0).coerceAtMost(1.0) + (exerciseMinutes / 30.0).coerceAtMost(1.0)) * 50.0).roundToInt()
+        add("activity", "Activité", activityScore, activityAvailable, "$steps pas • $exerciseMinutes min", "8 000 pas • 30 min", "Combine les pas et les minutes d’activité des dernières 24 heures.")
+        val sleepHours = sleepMinutes / 60.0
+        add("sleep", "Sommeil", ((sleepHours / 8.0).coerceAtMost(1.0) * 100).roundToInt(), sleepMinutes > 0, "%.1f h".format(Locale.US, sleepHours), "8 h", "Évalue la durée de sommeil disponible dans Health Connect.")
+        add("hydration", "Hydratation", ((hydrationLitres / 2.5).coerceAtMost(1.0) * 100).roundToInt(), hydrationLitres > 0, "%.2f L".format(Locale.US, hydrationLitres), "2,5 L", "Compare l’eau enregistrée à l’objectif quotidien.")
+        val mealCount = nutrition.optInt("mealCount")
+        val goals = nutrition.optJSONObject("goals") ?: JSONObject()
+        fun ratio(valueKey: String): Double {
+            val goal = goals.optDouble(valueKey, 0.0)
+            return if (goal > 0) (nutrition.optDouble(valueKey, 0.0) / goal).coerceAtMost(1.0) else 0.0
+        }
+        val nutritionScore = ((ratio("carbohydratesGrams") + ratio("proteinGrams") + ratio("fatGrams") + ratio("fiberGrams")) * 25.0).roundToInt()
+        val nutritionCurrent = mealCount.toString() + " repas • " + nutrition.optDouble("caloriesKcal", 0.0).roundToInt() + " kcal"
+        add("nutrition", "Nutrition", nutritionScore, mealCount > 0, nutritionCurrent, "Objectifs nutritionnels", "Analyse les macronutriments et les repas transmis par les connecteurs.")
+        val recoveryAvailable = averageHeartRate != null
+        val recoveryScore = if (averageHeartRate == null) 0 else when (averageHeartRate) {
+            in 50..90 -> 100
+            in 40..110 -> 75
+            else -> 45
+        }
+        add("recovery", "Récupération", recoveryScore, recoveryAvailable, averageHeartRate?.let { "$it bpm" } ?: "—", "Zone personnelle", "Indicateur de bien-être basé sur la fréquence cardiaque disponible, sans valeur diagnostique.")
+        var total = 0
+        for (index in 0 until components.length()) total += components.getJSONObject(index).getInt("earnedPoints")
+        return JSONObject().apply {
+            put("overall", total.coerceIn(0, 100))
+            put("maximum", 100)
+            put("components", components)
+            put("method", "5 catégories de 20 points : activité, sommeil, hydratation, nutrition et récupération.")
+            put("medicalDisclaimer", "Score de bien-être informatif, non diagnostique.")
+        }
+    }
+
+    private fun exerciseTypeLabel(type: Int): String = when (type) {
+        ExerciseSessionRecord.EXERCISE_TYPE_WALKING -> "Marche"
+        ExerciseSessionRecord.EXERCISE_TYPE_RUNNING -> "Course"
+        ExerciseSessionRecord.EXERCISE_TYPE_SOCCER -> "Football"
+        ExerciseSessionRecord.EXERCISE_TYPE_CYCLING -> "Vélo"
+        ExerciseSessionRecord.EXERCISE_TYPE_SWIMMING_POOL -> "Natation"
+        ExerciseSessionRecord.EXERCISE_TYPE_STRENGTH_TRAINING -> "Renforcement"
+        ExerciseSessionRecord.EXERCISE_TYPE_WEIGHTLIFTING -> "Musculation"
+        ExerciseSessionRecord.EXERCISE_TYPE_YOGA -> "Yoga"
+        ExerciseSessionRecord.EXERCISE_TYPE_HIKING -> "Randonnée"
+        else -> "Autre activité"
     }
 
     private fun attribution(records: List<Pair<String, Instant>>): JSONObject {
