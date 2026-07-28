@@ -11,8 +11,8 @@ android {
         applicationId = "com.vitalis.healthos"
         minSdk = 28
         targetSdk = 35
-        versionCode = 14
-        versionName = "3.9.1-classic-interface"
+        versionCode = 15
+        versionName = "3.10.0-day-nutrition"
     }
 
     buildTypes {
