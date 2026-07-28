@@ -585,8 +585,8 @@ class MainActivity : ComponentActivity() {
                 }
                 lastSourcePackages = sources
                 lastHealthPayload = payload
-                dispatchHealthData(payload)
                 dispatchConnectorStatus(sources)
+                dispatchHealthData(payload)
                 dispatchSyncState("complete")
             }.onFailure { error ->
                 dispatchSyncState("error", error.message)
