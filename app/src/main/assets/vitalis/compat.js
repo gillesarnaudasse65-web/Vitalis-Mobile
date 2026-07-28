@@ -207,6 +207,51 @@
         if (window.VitalisConnectorControls) window.VitalisConnectorControls.showSources();
       };
     }
+    if (/^nutrition$|voir.*detail.*nutrition|detail.*repas/.test(label)) {
+      return function () {
+        if (window.VitalisDeepDetails) window.VitalisDeepDetails.open("nutrition");
+      };
+    }
+    if (/^activite$|voir.*detail.*activite/.test(label)) {
+      return function () {
+        if (window.VitalisDeepDetails) window.VitalisDeepDetails.open("activity");
+      };
+    }
+    if (/^sommeil$|voir.*detail.*sommeil/.test(label)) {
+      return function () {
+        if (window.VitalisDeepDetails) window.VitalisDeepDetails.open("sleep");
+      };
+    }
+    if (/signes.*vitaux|frequence.*cardiaque|voir.*detail.*oxygene|pression.*arterielle/.test(label)) {
+      return function () {
+        if (window.VitalisDeepDetails) window.VitalisDeepDetails.open("recovery");
+      };
+    }
+    if (/voir.*detail.*pas/.test(label)) {
+      return function () {
+        if (window.VitalisDeepDetails) window.VitalisDeepDetails.open("steps");
+      };
+    }
+    if (/voir.*detail.*calorie/.test(label)) {
+      return function () {
+        if (window.VitalisDeepDetails) window.VitalisDeepDetails.open("activeCalories");
+      };
+    }
+    if (/voir.*detail.*hydratation/.test(label)) {
+      return function () {
+        if (window.VitalisDeepDetails) window.VitalisDeepDetails.open("hydration");
+      };
+    }
+    if (/bien-etre.*mental|gestion.*stress/.test(label)) {
+      return function () {
+        if (window.VitalisAI) window.VitalisAI.openFeature("gestion du stress et bien-être mental");
+      };
+    }
+    if (/dossier.*sante/.test(label)) {
+      return function () {
+        if (window.VitalisAI) window.VitalisAI.openFeature("bilan et rapport santé");
+      };
+    }
     if (/^coach$|ouvrir.*coach|actualiser.*conseil|coach.*ia|ia.*coach|coach.*ai|ai.*coach|demander.*kofi|parler.*kofi|parler.*coach|demarrer.*direct|analyse.*ia|conseil.*ia|analyse.*sante|bilan.*sante|rapport.*sante|plan.*nutrition|nutrition.*personnalis|analyse.*sommeil|programme.*activite|programme.*sport|plan.*entrainement|analyse.*recuperation|gestion.*stress|recommandation.*personnalis|insight.*sante/.test(label)) {
       return function () {
         if (window.VitalisAI) window.VitalisAI.openFeature(label);
@@ -646,6 +691,142 @@
     open: showCategory,
     refresh: function () { if (bridge && bridge.refreshHealthData) bridge.refreshHealthData(); }
   };
+})();
+
+(function () {
+  if (window.__vitalisSelectedDayAndNutrition) return;
+  window.__vitalisSelectedDayAndNutrition = true;
+
+  var bridge = window.VitalisAndroid || null;
+  var currentData = {};
+  var lastRequestedDate = "";
+  var renderTimer = null;
+  var months = {
+    janvier:1, fevrier:2, mars:3, avril:4, mai:5, juin:6,
+    juillet:7, aout:8, septembre:9, octobre:10, novembre:11, decembre:12
+  };
+
+  function plain(value) {
+    return String(value || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/\s+/g, " ").trim();
+  }
+
+  function selectedDateIso() {
+    var button = document.querySelector('[aria-label="Ouvrir le calendrier"]');
+    var buttonText = plain(button && (button.innerText || button.textContent));
+    var pageText = plain(document.body && document.body.innerText);
+    var match = buttonText.match(/(\d{1,2})\s+([a-z]+)/);
+    if (!match) match = pageText.match(/(?:lundi|mardi|mercredi|jeudi|vendredi|samedi|dimanche)\s+(\d{1,2})\s+([a-z]+)\s+(20\d{2})/);
+    if (!match) return "";
+    var day = Number(match[1]);
+    var month = months[match[2]];
+    var yearMatch = pageText.match(/(?:lundi|mardi|mercredi|jeudi|vendredi|samedi|dimanche)\s+\d{1,2}\s+[a-z]+\s+(20\d{2})/);
+    var year = yearMatch ? Number(yearMatch[1]) : new Date().getFullYear();
+    if (!day || !month || !year) return "";
+    return year + "-" + String(month).padStart(2, "0") + "-" + String(day).padStart(2, "0");
+  }
+
+  function requestSelectedDate(force) {
+    var iso = selectedDateIso();
+    if (!iso || !bridge || !bridge.refreshHealthDataForDate) return;
+    if (!force && iso === lastRequestedDate) return;
+    lastRequestedDate = iso;
+    bridge.refreshHealthDataForDate(iso);
+  }
+
+  function formatSleep(minutes) {
+    var value = Math.max(0, Number(minutes || 0));
+    return Math.floor(value / 60) + "h " + String(Math.round(value % 60)).padStart(2, "0");
+  }
+
+  function setMetric(selector, value) {
+    var card = document.querySelector(selector);
+    var strong = card && card.querySelector("strong");
+    if (strong && strong.textContent !== String(value)) strong.textContent = value;
+  }
+
+  function updateVisibleMetrics() {
+    var d = currentData || {};
+    setMetric('[aria-label="Voir le détail : Pas"]', Number(d.steps || 0).toLocaleString("fr-FR"));
+    setMetric('[aria-label="Voir le détail : Activité"]', Math.round(Number(d.exerciseMinutes || 0)));
+    setMetric('[aria-label="Voir le détail : Calories"]', Math.round(Number(d.activeCalories || 0)).toLocaleString("fr-FR"));
+    setMetric('[aria-label="Voir le détail : Sommeil"]', formatSleep(d.sleepMinutes));
+    setMetric('[aria-label="Voir le détail : Fréquence cardiaque"]', d.averageHeartRate == null ? "—" : Math.round(d.averageHeartRate));
+    setMetric('[aria-label="Voir le détail : Oxygène sanguin"]', d.oxygenPercent == null ? "—" : Number(d.oxygenPercent).toFixed(0) + "%");
+    setMetric('[aria-label="Voir le détail : Hydratation"]', Number(d.hydrationLitres || 0).toFixed(2) + " L");
+    setMetric('[aria-label="Voir le détail : Composition"]', d.weightKg == null ? "—" : Number(d.weightKg).toFixed(1) + " kg");
+  }
+
+  function nutritionMarkup() {
+    var n = currentData.nutrition || {};
+    var calories = Math.round(Number(n.caloriesKcal || 0));
+    var meals = Number(n.mealCount || 0);
+    var carbs = Math.round(Number(n.carbohydratesGrams || 0));
+    var protein = Math.round(Number(n.proteinGrams || 0));
+    var fat = Math.round(Number(n.fatGrams || 0));
+    var fiber = Math.round(Number(n.fiberGrams || 0));
+    return '<div class="coach-top"><span class="ai-badge">Nutrition du jour</span><span class="coach-time">' +
+      meals + ' repas</span></div><h2>' + calories + ' kcal enregistrées</h2><p>Glucides ' + carbs +
+      ' g · Protéines ' + protein + ' g · Lipides ' + fat + ' g · Fibres ' + fiber +
+      ' g</p><div class="coach-plan"><span><strong>Source</strong><small>Health Connect · ' +
+      (currentData.selectedDate || selectedDateIso() || "aujourd’hui") +
+      '</small></span></div><button class="coach-action" data-vitalis-open-nutrition>Voir toute la nutrition →</button>';
+  }
+
+  function enhanceClassicInterface() {
+    updateVisibleMetrics();
+    var duplicateBrief = document.querySelector(".proactive-brief");
+    if (duplicateBrief) duplicateBrief.style.display = "none";
+    var floatingCoach = document.querySelector(".agent-fab");
+    if (floatingCoach) floatingCoach.style.display = "none";
+    document.querySelectorAll("button").forEach(function (button) {
+      if (/changer de coach/.test(plain(button.innerText || button.textContent))) button.style.display = "none";
+    });
+    var nutritionCard = document.querySelector("article.coach-card");
+    var signature = JSON.stringify(currentData.nutrition || {}) + "|" + (currentData.selectedDate || "");
+    if (nutritionCard && nutritionCard.getAttribute("data-vitalis-nutrition-signature") !== signature) {
+      nutritionCard.setAttribute("data-vitalis-nutrition-signature", signature);
+      nutritionCard.innerHTML = nutritionMarkup();
+      var open = nutritionCard.querySelector("[data-vitalis-open-nutrition]");
+      if (open) open.onclick = function (event) {
+        event.preventDefault();
+        event.stopPropagation();
+        if (window.VitalisDeepDetails) window.VitalisDeepDetails.open("nutrition");
+      };
+    }
+  }
+
+  function scheduleEnhancement() {
+    clearTimeout(renderTimer);
+    renderTimer = setTimeout(enhanceClassicInterface, 80);
+  }
+
+  document.addEventListener("click", function (event) {
+    var button = event.target && event.target.closest ? event.target.closest("button") : null;
+    if (!button) return;
+    var label = plain(
+      (button.getAttribute("aria-label") || "") + " " +
+      (button.getAttribute("title") || "") + " " +
+      (button.innerText || button.textContent || "")
+    );
+    var calendar = button.closest('[role="dialog"],[class*="calendar"],[class*="date-picker"]');
+    if (/jour precedent|jour suivant|ouvrir le calendrier|aujourd'hui|semaine|mois/.test(label) || calendar) {
+      setTimeout(function () { requestSelectedDate(true); }, 220);
+      setTimeout(function () { requestSelectedDate(true); }, 850);
+    }
+  }, false);
+
+  window.addEventListener("vitalis-health-data", function (event) {
+    currentData = event.detail || {};
+    scheduleEnhancement();
+  });
+
+  if (document.body && window.MutationObserver) {
+    new MutationObserver(scheduleEnhancement).observe(document.body, {childList:true,subtree:true});
+  }
+  setTimeout(function () {
+    requestSelectedDate(false);
+    enhanceClassicInterface();
+  }, 650);
 })();
 
 (function () {
