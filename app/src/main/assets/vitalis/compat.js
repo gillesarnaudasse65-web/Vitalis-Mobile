@@ -197,7 +197,17 @@
     if (/ajouter.*eau|hydratation|add.*water/.test(label)) return addWater;
     if (/ajouter.*mesure|enregistrer.*mesure|add.*measure/.test(label)) return addMeasure;
     if (/autoriser.*health connect|connecter.*health connect|health connect.*autoriser/.test(label)) return healthConnect;
-    if (/^coach$|ouvrir.*coach|actualiser.*conseil|coach.*ia|ia.*coach|demander.*kofi|parler.*kofi|analyse.*ia|conseil.*ia|analyse.*sante|bilan.*sante|rapport.*sante|plan.*nutrition|nutrition.*personnalis|analyse.*sommeil|programme.*activite|programme.*sport|plan.*entrainement|analyse.*recuperation|gestion.*stress|recommandation.*personnalis|insight.*sante/.test(label)) {
+    if (/actualiser.*donnee|synchroniser.*donnee|refresh.*data/.test(label)) {
+      return function () {
+        if (nativeBridge && nativeBridge.refreshHealthData) nativeBridge.refreshHealthData();
+      };
+    }
+    if (/gerer.*source|voir.*source|source.*donnee/.test(label)) {
+      return function () {
+        if (window.VitalisConnectorControls) window.VitalisConnectorControls.showSources();
+      };
+    }
+    if (/^coach$|ouvrir.*coach|actualiser.*conseil|coach.*ia|ia.*coach|coach.*ai|ai.*coach|demander.*kofi|parler.*kofi|parler.*coach|demarrer.*direct|analyse.*ia|conseil.*ia|analyse.*sante|bilan.*sante|rapport.*sante|plan.*nutrition|nutrition.*personnalis|analyse.*sommeil|programme.*activite|programme.*sport|plan.*entrainement|analyse.*recuperation|gestion.*stress|recommandation.*personnalis|insight.*sante/.test(label)) {
       return function () {
         if (window.VitalisAI) window.VitalisAI.openFeature(label);
       };
@@ -351,40 +361,9 @@
 
   function createControls() {
     installStyles();
-    if (document.getElementById("vitalis-native-control-dock")) return;
-    var dock = document.createElement("div");
-    dock.id = "vitalis-native-control-dock";
-    dock.className = "vitalis-control-dock";
-    dock.innerHTML =
-      '<button class="vitalis-control-button" data-vitalis-control="refresh" aria-label="Actualiser les données" title="Actualiser les données">↻ <span>Actualiser</span></button>' +
-      '<button class="vitalis-control-button" data-vitalis-control="voice" aria-label="Activer ou arrêter la voix" title="Voix du coach">🔊 <span>Voix</span></button>' +
-      '<button class="vitalis-control-button" data-vitalis-control="microphone" aria-label="Activer ou couper le micro" title="Microphone">🎙️ <span>Micro</span></button>';
-    document.body.appendChild(dock);
-
-    dock.querySelector('[data-vitalis-control="refresh"]').onclick = function () {
-      refreshRequested = true;
-      this.classList.add("loading");
-      this.innerHTML = '⟳ <span>Sync…</span>';
-      if (bridge && bridge.refreshHealthData) bridge.refreshHealthData();
-      else showSourceReport();
-    };
-    dock.querySelector('[data-vitalis-control="voice"]').onclick = function () {
-      if (!bridge || !bridge.speakText) return;
-      if (speaking || (bridge.isSpeaking && bridge.isSpeaking())) {
-        bridge.stopSpeaking();
-        speaking = false;
-        updateControlStates();
-        return;
-      }
-      var message = buildHealthSummary();
-      bridge.speakText(message, "fr-FR");
-    };
-    dock.querySelector('[data-vitalis-control="microphone"]').onclick = function () {
-      microphoneOn = !microphoneOn;
-      if (bridge && bridge.setMicrophoneEnabled) bridge.setMicrophoneEnabled(microphoneOn);
-      updateControlStates();
-    };
-    updateControlStates();
+    var oldDock = document.getElementById("vitalis-native-control-dock");
+    if (oldDock) oldDock.remove();
+    document.documentElement.setAttribute("data-vitalis-native-controls", "ready");
   }
 
   function buildHealthSummary() {
