@@ -201,10 +201,9 @@ class MainActivity : ComponentActivity() {
 
                 override fun onPageFinished(view: WebView, url: String) {
                     loading.visibility = android.view.View.GONE
-                    if (requestHost(url) == VITALIS_HOST) {
-                        remotePageFinished = true
-                        injectClassicCompatibility(view)
-                    }
+                    val host = requestHost(url)
+                    if (host == VITALIS_HOST) remotePageFinished = true
+                    if (host == VITALIS_HOST || host == LOCAL_ASSET_HOST) injectClassicCompatibility(view)
                     view.evaluateJavascript(
                         "window.dispatchEvent(new CustomEvent('vitalis-native-ready',{detail:{platform:'android',version:'3.7'}}));",
                         null
