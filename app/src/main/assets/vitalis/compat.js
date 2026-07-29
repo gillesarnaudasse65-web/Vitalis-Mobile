@@ -1162,3 +1162,159 @@
     }
   };
 })();
+
+
+/* Vitalis 3.11 — catalogue complet des coachs et actualisation visible */
+(function () {
+  if (window.__vitalisCoachRefresh311) return;
+  window.__vitalisCoachRefresh311 = true;
+
+  var bridge = window.VitalisAndroid || null;
+  var coaches = [
+    { id: "general", icon: "🌿", name: "Kofi", role: "Coach santé global", prompt: "bilan santé global, priorités et recommandations personnalisées" },
+    { id: "nutrition", icon: "🥗", name: "Ama", role: "Coach nutrition", prompt: "nutrition, repas, calories, protéines, glucides, lipides, fibres et objectifs" },
+    { id: "activity", icon: "🏃", name: "Ayo", role: "Coach activité", prompt: "activité physique, séances, pas, progression et programme sportif" },
+    { id: "sleep", icon: "🌙", name: "Nia", role: "Coach sommeil", prompt: "sommeil, régularité, récupération nocturne et conseils de repos" },
+    { id: "recovery", icon: "❤️", name: "Sékou", role: "Coach récupération", prompt: "récupération, fréquence cardiaque, hydratation, oxygène et charge d’activité" },
+    { id: "mental", icon: "🧘", name: "Zuri", role: "Coach bien-être mental", prompt: "bien-être mental, stress, habitudes, respiration et équilibre" }
+  ];
+  var refreshBusy = false;
+
+  function norm(value) {
+    return String(value || "").toLowerCase().normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "").replace(/\s+/g, " ").trim();
+  }
+
+  function style() {
+    if (document.getElementById("vitalis-coaches-311-style")) return;
+    var el = document.createElement("style");
+    el.id = "vitalis-coaches-311-style";
+    el.textContent =
+      ".vitalis-refresh-311{display:inline-flex;align-items:center;gap:7px;border:0;border-radius:999px;padding:10px 14px;background:#063c30;color:#fff;font:700 12px system-ui;box-shadow:0 5px 16px rgba(6,60,48,.18)}" +
+      ".vitalis-refresh-311[disabled]{opacity:.62}.vitalis-refresh-311-spin{display:inline-block;animation:vitalis-spin-311 .8s linear infinite}" +
+      "@keyframes vitalis-spin-311{to{transform:rotate(360deg)}}" +
+      ".vitalis-coach-grid-311{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin:12px 0}" +
+      ".vitalis-coach-card-311{border:1px solid #dbe6e0;border-radius:16px;padding:13px;background:#fff;text-align:left;color:#14342b}" +
+      ".vitalis-coach-card-311 strong{display:block;margin:5px 0 2px}.vitalis-coach-card-311 small{color:#667b73;line-height:1.35}" +
+      ".vitalis-coach-avatar-311{font-size:25px}.vitalis-coach-open-311{margin-top:9px;color:#087052;font-size:12px;font-weight:800}" +
+      ".vitalis-sync-note-311{font:12px system-ui;color:#5d756d;margin:8px 2px}";
+    document.head.appendChild(el);
+  }
+
+  function selectedDay() {
+    var data = document.body && document.body.getAttribute("data-vitalis-selected-date");
+    var selected = document.querySelector(
+      "[data-selected-date],[aria-selected='true'][data-date],input[type='date']"
+    );
+    return (selected && (selected.getAttribute("data-selected-date") ||
+      selected.getAttribute("data-date") || selected.value)) || data || new Date().toISOString().slice(0, 10);
+  }
+
+  function askCoach(coach) {
+    var request = coach.prompt + ". Analyse les données du jour sélectionné (" + selectedDay() +
+      "), indique les données manquantes et cite les sources/connecteurs disponibles.";
+    if (window.VitalisAI && window.VitalisAI.openFeature) {
+      window.VitalisAI.openFeature(request);
+    } else if (window.VitalisNativeActions && window.VitalisNativeActions.openCoach) {
+      window.VitalisNativeActions.openCoach(request);
+    }
+  }
+
+  function showCoaches() {
+    style();
+    var old = document.querySelector(".vitalis-coaches-311-overlay");
+    if (old) old.remove();
+    var overlay = document.createElement("div");
+    overlay.className = "vitalis-native-overlay vitalis-coaches-311-overlay";
+    var cards = coaches.map(function (coach) {
+      return '<button class="vitalis-coach-card-311" data-coach="' + coach.id + '">' +
+        '<span class="vitalis-coach-avatar-311">' + coach.icon + '</span><strong>' + coach.name +
+        '</strong><small>' + coach.role + '</small><div class="vitalis-coach-open-311">Ouvrir le coach</div></button>';
+    }).join("");
+    overlay.innerHTML = '<div class="vitalis-native-sheet"><div class="vitalis-native-head">' +
+      '<div><h3>Tous mes coachs IA</h3><div class="vitalis-sync-note-311">Chaque coach analyse la date sélectionnée et les données autorisées.</div></div>' +
+      '<button class="vitalis-native-close" aria-label="Fermer">×</button></div>' +
+      '<div class="vitalis-coach-grid-311">' + cards + '</div></div>';
+    document.body.appendChild(overlay);
+    overlay.querySelector(".vitalis-native-close").onclick = function () { overlay.remove(); };
+    overlay.addEventListener("click", function (event) {
+      if (event.target === overlay) overlay.remove();
+      var card = event.target.closest && event.target.closest("[data-coach]");
+      if (!card) return;
+      var coach = coaches.filter(function (item) { return item.id === card.getAttribute("data-coach"); })[0];
+      if (coach) { overlay.remove(); askCoach(coach); }
+    });
+  }
+
+  function refresh(button) {
+    if (refreshBusy) return;
+    refreshBusy = true;
+    if (button) {
+      button.disabled = true;
+      button.innerHTML = '<span class="vitalis-refresh-311-spin">↻</span> Actualisation…';
+    }
+    try {
+      var day = selectedDay();
+      window.dispatchEvent(new CustomEvent("vitalis-selected-date-change", { detail: { date: day, force: true } }));
+      document.dispatchEvent(new CustomEvent("vitalis-selected-date-change", { detail: { date: day, force: true } }));
+      if (bridge && bridge.setSelectedDate) bridge.setSelectedDate(day);
+      if (bridge && bridge.refreshHealthData) bridge.refreshHealthData();
+      else if (window.VitalisNativeActions && window.VitalisNativeActions.refreshHealthData) {
+        window.VitalisNativeActions.refreshHealthData();
+      }
+    } catch (_) {
+      refreshBusy = false;
+      if (button) { button.disabled = false; button.innerHTML = "↻ Actualiser les données"; }
+    }
+    setTimeout(function () {
+      if (!refreshBusy) return;
+      refreshBusy = false;
+      if (button) { button.disabled = false; button.innerHTML = "↻ Actualiser les données"; }
+    }, 15000);
+  }
+
+  function installButtons() {
+    style();
+    if (!document.getElementById("vitalis-refresh-311")) {
+      var refreshButton = document.createElement("button");
+      refreshButton.id = "vitalis-refresh-311";
+      refreshButton.className = "vitalis-refresh-311";
+      refreshButton.innerHTML = "↻ Actualiser les données";
+      refreshButton.onclick = function () { refresh(refreshButton); };
+      var dateArea = document.querySelector("[data-date-navigation],input[type='date']") ||
+        Array.prototype.slice.call(document.querySelectorAll("h1,h2,h3,p,div")).filter(function (el) {
+          var t = norm(el.textContent);
+          return t === "aujourd'hui" || t === "aujourdhui" || /^\d{1,2}\s+(janvier|fevrier|mars|avril|mai|juin|juillet|aout|septembre|octobre|novembre|decembre)/.test(t);
+        })[0];
+      var host = dateArea && (dateArea.closest("section,header") || dateArea.parentElement);
+      (host || document.querySelector("main") || document.body).insertBefore(refreshButton, (host || document.querySelector("main") || document.body).firstChild);
+    }
+  }
+
+  window.addEventListener("vitalis-sync-state", function (event) {
+    var detail = event.detail || {};
+    var button = document.getElementById("vitalis-refresh-311");
+    if (detail.status === "complete" || detail.status === "error") {
+      refreshBusy = false;
+      if (button) {
+        button.disabled = false;
+        button.innerHTML = detail.status === "complete" ? "✓ Données actualisées" : "↻ Réessayer l’actualisation";
+        setTimeout(function () { button.innerHTML = "↻ Actualiser les données"; }, 3000);
+      }
+    }
+  });
+
+  document.addEventListener("click", function (event) {
+    var target = event.target && event.target.closest ? event.target.closest("button,a,[role='button']") : null;
+    if (!target) return;
+    var label = norm((target.innerText || "") + " " + (target.getAttribute("aria-label") || ""));
+    if (/tous.*coach|mes.*coach|voir.*coach|equipe.*coach/.test(label)) {
+      event.preventDefault(); event.stopImmediatePropagation(); showCoaches();
+    }
+  }, true);
+
+  window.VitalisCoaches = { all: coaches.slice(), open: showCoaches, ask: askCoach, refresh: refresh };
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", installButtons);
+  else installButtons();
+  new MutationObserver(installButtons).observe(document.documentElement, { childList: true, subtree: true });
+})();
