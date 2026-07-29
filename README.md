@@ -69,3 +69,10 @@ La clé reste chiffrée sur l’appareil. La supprimer depuis les réglages IA r
 5. Décompresser le ZIP puis installer `app-debug.apk`.
 
 Une compilation est lancée automatiquement à chaque mise à jour de `main`.
+
+## Vitalis 3.11 — coachs et actualisation
+
+- Tous les coachs spécialisés sont de nouveau accessibles : santé globale, nutrition, activité, sommeil, récupération et bien-être mental.
+- L’accueil conserve un seul coach principal afin d’éviter les doublons ; le catalogue complet reste accessible depuis l’espace Coach.
+- Le bouton **Actualiser les données** relance la synchronisation pour la date sélectionnée et actualise cartes, nutrition, score et sources.
+- L’état de synchronisation est visible : actualisation en cours, réussite horodatée ou possibilité de réessayer.
