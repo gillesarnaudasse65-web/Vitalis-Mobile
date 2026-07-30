@@ -126,16 +126,29 @@
 
   function updateExistingCoachCard() {
     var coach = coachById(selectedCoachId);
-    var buttons = Array.prototype.slice.call(document.querySelectorAll("button,a,[role='button']")).filter(function (item) {
-      return /changer.*coach|change.*coach/.test(norm(item.innerText || item.textContent));
+    var hosts = Array.prototype.slice.call(document.querySelectorAll(
+      ".dashboard-coach-stage,.proactive-brief,article.coach,[data-vitalis-coach-host]"
+    ));
+    Array.prototype.slice.call(document.querySelectorAll("button,a,[role='button']")).forEach(function (button) {
+      var label = norm((button.innerText || button.textContent || "") + " " +
+        (button.getAttribute("aria-label") || ""));
+      if (/changer.*coach|change.*coach/.test(label)) {
+        button.style.removeProperty("display");
+        var host = button.closest("article,section") || button.parentElement;
+        if (host && hosts.indexOf(host) < 0) hosts.push(host);
+      }
     });
-    buttons.forEach(function (button) {
-      button.style.removeProperty("display");
-      var host = button.closest("article,section") || button.parentElement;
+    hosts.forEach(function (host) {
       if (!host) return;
+      var stageLabel = host.querySelector(".stage-copy > span");
+      if (stageLabel && /coach/.test(norm(stageLabel.textContent))) {
+        var stageTitle = coach.name.toUpperCase() + " · " + coach.role.toUpperCase();
+        if (stageLabel.textContent !== stageTitle) stageLabel.textContent = stageTitle;
+      }
       Array.prototype.slice.call(host.querySelectorAll("h1,h2,h3,h4,b,strong")).some(function (heading) {
-        if (/kofi|ama|ayo|nia|sekou|zuri/.test(norm(heading.textContent))) {
-          heading.textContent = coach.name + " — " + coach.role;
+        if (/aina|malik|kofi|ama|ayo|nia|sekou|zuri|coach vitalis|coach sante/.test(norm(heading.textContent))) {
+          var title = coach.name + " — " + coach.role;
+          if (heading.textContent !== title) heading.textContent = title;
           return true;
         }
         return false;
@@ -148,8 +161,10 @@
         avatar.style.backgroundPosition = "center 30%";
       }
       var image = host.querySelector("img");
-      if (image && /coach|kofi|avatar/.test(norm((image.alt || "") + " " + (image.className || "")))) {
-        image.src = imageUrl(coach);
+      if (image && /coach|kofi|aina|malik|avatar/.test(norm(
+        (image.alt || "") + " " + (image.className || "") + " " + (image.src || "")
+      ))) {
+        if (image.src !== imageUrl(coach)) image.src = imageUrl(coach);
         image.alt = coach.name + ", " + coach.role;
       }
     });
@@ -475,7 +490,8 @@
   function actionLabel(item) {
     if (item.status === "connected") return "Gérer";
     if (item.action === "authorize_health_connect") return "Autoriser";
-    if (item.action === "open_provider") return "Ouvrir pour autoriser";
+    if (item.action === "authorize_via_health_connect") return "Autoriser et ouvrir";
+    if (item.action === "open_provider") return "Ouvrir l’application";
     return "Installer";
   }
 
@@ -492,7 +508,7 @@
     var root = overlay(
       '<div><h3>Connecteurs et autorisations</h3><div class="vitalis-agent-chip-312">' +
       Number(connectorState.connectorCount || 0) + " source(s) avec données</div></div>",
-      '<p class="vitalis-ai-note">Une application installée reste indépendante. Vitalis peut lire ses données lorsqu’elle les publie dans Health Connect ou lorsqu’un flux officiel du fournisseur est autorisé.</p>' +
+      '<p class="vitalis-ai-note">« Autoriser et ouvrir » demande d’abord les permissions Health Connect à Vitalis, puis ouvre l’application afin que vous activiez son partage. Une application sans passerelle Health Connect exige sa propre autorisation officielle.</p>' +
       (cards || '<div class="vitalis-deep-empty">Aucun connecteur disponible.</div>')
     );
     root.addEventListener("click", function (event) {
@@ -565,6 +581,10 @@
       event.preventDefault();
       event.stopImmediatePropagation();
       showCoachCatalog();
+    } else if (/parler.*coach|coach.*vitalis.*ai|ouvrir.*coach|demarrer.*direct/.test(label)) {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      openCoach(selectedCoachId);
     } else if (/vitalis.*developer|developpeur.*vitalis|developer.*ai/.test(label)) {
       event.preventDefault();
       event.stopImmediatePropagation();
