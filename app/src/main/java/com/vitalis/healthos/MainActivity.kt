@@ -100,6 +100,7 @@ class MainActivity : ComponentActivity() {
     private var speechRecognizer: SpeechRecognizer? = null
     private var microphoneEnabled = false
     private var selectedHealthDate: LocalDate = LocalDate.now()
+    private var pendingConnectorId: String? = null
 
     private data class ConnectorDefinition(
         val id: String,
@@ -183,6 +184,10 @@ class MainActivity : ComponentActivity() {
             else "Autorisation partielle. Complétez les catégories dans Health Connect."
         )
         readHealthData()
+        pendingConnectorId?.also { connectorId ->
+            pendingConnectorId = null
+            connectorCatalog.firstOrNull { it.id == connectorId }?.let(::openInstalledConnector)
+        }
     }
 
     @SuppressLint("SetJavaScriptEnabled")
@@ -1043,6 +1048,21 @@ class MainActivity : ComponentActivity() {
             }
             return
         }
+        if (definition.mode == "health_connect" || definition.mode == "bridge") {
+            when (HealthConnectClient.getSdkStatus(this)) {
+                HealthConnectClient.SDK_AVAILABLE -> {
+                    pendingConnectorId = definition.id
+                    permissionLauncher.launch(healthPermissions)
+                }
+                HealthConnectClient.SDK_UNAVAILABLE_PROVIDER_UPDATE_REQUIRED -> openHealthConnectStore()
+                else -> notifyWeb(false, "unavailable", "Health Connect n’est pas disponible sur cet appareil.")
+            }
+            return
+        }
+        openInstalledConnector(definition)
+    }
+
+    private fun openInstalledConnector(definition: ConnectorDefinition) {
         val packageName = definition.packages.firstOrNull(::isPackageInstalled)
         if (packageName != null) {
             val launchIntent = packageManager.getLaunchIntentForPackage(packageName)
@@ -1051,7 +1071,10 @@ class MainActivity : ComponentActivity() {
                 notifyWeb(
                     true,
                     "connector_app_opened",
-                    "${definition.name} est ouvert. Activez son partage Health Connect ou son autorisation officielle."
+                    if (definition.mode == "health_connect" || definition.mode == "bridge")
+                        "${definition.name} est ouvert. Activez son partage vers Health Connect, puis revenez dans Vitalis et actualisez."
+                    else
+                        "${definition.name} est ouvert. L’accès direct exige l’autorisation officielle proposée par ce fournisseur."
                 )
                 return
             }
@@ -1600,6 +1623,8 @@ class MainActivity : ComponentActivity() {
                     "action",
                     when {
                         definition.id == "health_connect" -> "authorize_health_connect"
+                        installed != null && (definition.mode == "health_connect" || definition.mode == "bridge") ->
+                            "authorize_via_health_connect"
                         installed != null -> "open_provider"
                         else -> "install_provider"
                     }
