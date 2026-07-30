@@ -33,10 +33,25 @@
         <package android:name="com.ouraring.oura" />
         <package android:name="com.whoop.android" />
         <package android:name="com.withings.wiscale2" />
+        <package android:name="nl.appyhapps.healthsync" />
         <package android:name="com.myfitnesspal.android" />
         <package android:name="com.yazio.android" />
+        <package android:name="welmi.ai.android" />
         <package android:name="com.cronometer.android.gold" />
         <package android:name="com.sillens.shapeupclub" />
+        <package android:name="com.fiton.android" />
+        <package android:name="com.fitifyworkouts.bodyweight.workoutapp" />
+        <package android:name="stretchingworkouts.homeexercises.flexibility" />
+        <package android:name="com.peaksware.trainingpeaks" />
+        <package android:name="com.zwift.zwiftgame" />
+        <package android:name="com.zwift.android.prod" />
+        <package android:name="com.onepeloton.callisto" />
+        <package android:name="com.freeletics.lite" />
+        <package android:name="de.komoot.android" />
+        <package android:name="com.getsomeheadspace.android" />
+        <package android:name="com.calm.android" />
+        <package android:name="com.northcube.sleepcycle" />
+        <package android:name="com.welltory.client.android" />
         <package android:name="com.stt.android.suunto" />
         <package android:name="com.yf.smart.coros.dist" />
         <intent>

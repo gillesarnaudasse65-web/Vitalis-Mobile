@@ -11,8 +11,8 @@ android {
         applicationId = "com.vitalis.healthos"
         minSdk = 28
         targetSdk = 35
-        versionCode = 18
-        versionName = "3.13.0-coach-connector-fix"
+        versionCode = 19
+        versionName = "3.14.0-coaches-connectors"
     }
 
     buildTypes {

@@ -101,6 +101,7 @@ class MainActivity : ComponentActivity() {
     private var microphoneEnabled = false
     private var selectedHealthDate: LocalDate = LocalDate.now()
     private var pendingConnectorId: String? = null
+    private var refreshAfterConnectorReturn = false
 
     private data class ConnectorDefinition(
         val id: String,
@@ -122,12 +123,27 @@ class MainActivity : ComponentActivity() {
         ConnectorDefinition("oura", "Oura", listOf("com.ouraring.oura"), "provider", "La connexion complète nécessite l’autorisation officielle Oura."),
         ConnectorDefinition("whoop", "WHOOP", listOf("com.whoop.android"), "provider", "La connexion complète nécessite l’autorisation officielle WHOOP."),
         ConnectorDefinition("withings", "Withings", listOf("com.withings.wiscale2"), "health_connect", "Activez Health Connect dans Withings lorsque disponible."),
-        ConnectorDefinition("myfitnesspal", "MyFitnessPal", listOf("com.myfitnesspal.android"), "provider", "L’accès nutritionnel dépend des autorisations du fournisseur."),
+        ConnectorDefinition("health_sync", "Health Sync", listOf("nl.appyhapps.healthsync"), "bridge", "Passerelle autorisée vers Health Connect pour les fournisseurs compatibles."),
+        ConnectorDefinition("myfitnesspal", "MyFitnessPal", listOf("com.myfitnesspal.android"), "health_connect", "Activez Health Connect dans MyFitnessPal pour partager les données nutritionnelles disponibles."),
         ConnectorDefinition("yazio", "YAZIO", listOf("com.yazio.android"), "provider", "L’accès nutritionnel dépend des autorisations du fournisseur."),
+        ConnectorDefinition("welmi", "Welmi", listOf("welmi.ai.android"), "provider", "Ouvrez Welmi pour gérer le compte et les options de partage proposées."),
         ConnectorDefinition("cronometer", "Cronometer", listOf("com.cronometer.android.gold"), "provider", "L’accès nutritionnel dépend des autorisations du fournisseur."),
         ConnectorDefinition("lifesum", "Lifesum", listOf("com.sillens.shapeupclub"), "provider", "L’accès nutritionnel dépend des autorisations du fournisseur."),
+        ConnectorDefinition("fiton", "FitOn", listOf("com.fiton.android"), "provider", "Ouvrez FitOn pour gérer le compte et les intégrations proposées."),
+        ConnectorDefinition("fitify", "Fitify", listOf("com.fitifyworkouts.bodyweight.workoutapp"), "provider", "Ouvrez Fitify pour gérer le compte et les intégrations proposées."),
+        ConnectorDefinition("flexme", "FlexMe", listOf("stretchingworkouts.homeexercises.flexibility"), "provider", "Ouvrez FlexMe pour gérer le compte et les options de partage proposées."),
+        ConnectorDefinition("trainingpeaks", "TrainingPeaks", listOf("com.peaksware.trainingpeaks"), "provider", "La connexion complète dépend de l’autorisation officielle TrainingPeaks."),
+        ConnectorDefinition("zwift", "Zwift", listOf("com.zwift.zwiftgame", "com.zwift.android.prod"), "provider", "La connexion complète dépend des intégrations officielles Zwift."),
+        ConnectorDefinition("peloton", "Peloton", listOf("com.onepeloton.callisto"), "provider", "Ouvrez Peloton pour gérer le compte et les intégrations proposées."),
+        ConnectorDefinition("freeletics", "Freeletics", listOf("com.freeletics.lite"), "provider", "Ouvrez Freeletics pour gérer le compte et les intégrations proposées."),
+        ConnectorDefinition("komoot", "Komoot", listOf("de.komoot.android"), "provider", "La connexion complète dépend de l’autorisation officielle Komoot."),
+        ConnectorDefinition("headspace", "Headspace", listOf("com.getsomeheadspace.android"), "provider", "Ouvrez Headspace pour gérer le compte et les options de partage proposées."),
+        ConnectorDefinition("calm", "Calm", listOf("com.calm.android"), "provider", "Ouvrez Calm pour gérer le compte et les options de partage proposées."),
+        ConnectorDefinition("sleep_cycle", "Sleep Cycle", listOf("com.northcube.sleepcycle"), "provider", "Ouvrez Sleep Cycle pour gérer le compte et les options de partage proposées."),
+        ConnectorDefinition("welltory", "Welltory", listOf("com.welltory.client.android"), "provider", "Ouvrez Welltory pour gérer le compte et les intégrations proposées."),
         ConnectorDefinition("suunto", "Suunto", listOf("com.stt.android.suunto"), "provider", "Une autorisation Suunto officielle peut être nécessaire."),
-        ConnectorDefinition("coros", "COROS", listOf("com.yf.smart.coros.dist"), "provider", "Une autorisation COROS officielle peut être nécessaire.")
+        ConnectorDefinition("coros", "COROS", listOf("com.yf.smart.coros.dist"), "provider", "Une autorisation COROS officielle peut être nécessaire."),
+        ConnectorDefinition("apple_health", "Apple Health", emptyList(), "unsupported_android", "Apple Health n’est pas accessible depuis Android. Utilisez un service intermédiaire officiellement compatible.")
     )
 
     private val healthPermissions = setOf(
@@ -221,7 +237,7 @@ class MainActivity : ComponentActivity() {
             settings.mediaPlaybackRequiresUserGesture = false
             settings.mixedContentMode = android.webkit.WebSettings.MIXED_CONTENT_NEVER_ALLOW
             settings.cacheMode = android.webkit.WebSettings.LOAD_DEFAULT
-            settings.userAgentString = settings.userAgentString + " VitalisAndroid/3.12"
+            settings.userAgentString = settings.userAgentString + " VitalisAndroid/3.14"
             WebView.setWebContentsDebuggingEnabled(BuildConfig.DEBUG)
             addJavascriptInterface(VitalisAndroidBridge(), "VitalisAndroid")
             webChromeClient = object : WebChromeClient() {
@@ -242,8 +258,25 @@ class MainActivity : ComponentActivity() {
                 }
             }
             webViewClient = object : WebViewClient() {
-                override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest) =
-                    assetLoader.shouldInterceptRequest(request.url)
+                override fun shouldInterceptRequest(
+                    view: WebView,
+                    request: WebResourceRequest
+                ): WebResourceResponse? {
+                    val uri = request.url
+                    if (uri.host == VITALIS_HOST && uri.path?.startsWith(COACH_ASSET_PATH) == true) {
+                        val fileName = uri.lastPathSegment.orEmpty()
+                        if (fileName in COACH_ASSET_FILES) {
+                            return runCatching {
+                                WebResourceResponse(
+                                    "image/webp",
+                                    null,
+                                    assets.open("vitalis/coaches/$fileName")
+                                )
+                            }.getOrNull()
+                        }
+                    }
+                    return assetLoader.shouldInterceptRequest(uri)
+                }
 
                 override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
                     val uri = request.url
@@ -262,7 +295,7 @@ class MainActivity : ComponentActivity() {
                     }
                     if (host == VITALIS_HOST || host == LOCAL_ASSET_HOST) injectClassicCompatibility(view)
                     view.evaluateJavascript(
-                        "window.dispatchEvent(new CustomEvent('vitalis-native-ready',{detail:{platform:'android',version:'3.12'}}));",
+                        "window.dispatchEvent(new CustomEvent('vitalis-native-ready',{detail:{platform:'android',version:'3.14'}}));",
                         null
                     )
                     readHealthData()
@@ -307,6 +340,17 @@ class MainActivity : ComponentActivity() {
             }
         }.getOrNull() ?: return
         view.evaluateJavascript(script, null)
+    }
+
+    override fun onResume() {
+        super.onResume()
+        if (refreshAfterConnectorReturn && ::webView.isInitialized) {
+            refreshAfterConnectorReturn = false
+            Handler(Looper.getMainLooper()).postDelayed(
+                { readHealthData(selectedHealthDate) },
+                CONNECTOR_RETURN_REFRESH_DELAY_MS
+            )
+        }
     }
 
     private fun loadOfflineFallback() {
@@ -1048,6 +1092,14 @@ class MainActivity : ComponentActivity() {
             }
             return
         }
+        if (definition.mode == "unsupported_android") {
+            notifyWeb(
+                false,
+                "unsupported_android",
+                "${definition.name} n’est pas accessible depuis Android."
+            )
+            return
+        }
         if (definition.mode == "health_connect" || definition.mode == "bridge") {
             when (HealthConnectClient.getSdkStatus(this)) {
                 HealthConnectClient.SDK_AVAILABLE -> {
@@ -1067,6 +1119,7 @@ class MainActivity : ComponentActivity() {
         if (packageName != null) {
             val launchIntent = packageManager.getLaunchIntentForPackage(packageName)
             if (launchIntent != null) {
+                refreshAfterConnectorReturn = true
                 startActivity(launchIntent)
                 notifyWeb(
                     true,
@@ -1074,7 +1127,7 @@ class MainActivity : ComponentActivity() {
                     if (definition.mode == "health_connect" || definition.mode == "bridge")
                         "${definition.name} est ouvert. Activez son partage vers Health Connect, puis revenez dans Vitalis et actualisez."
                     else
-                        "${definition.name} est ouvert. L’accès direct exige l’autorisation officielle proposée par ce fournisseur."
+                        "${definition.name} est ouvert. Connectez-vous et activez l’intégration officielle proposée par ce fournisseur ; Vitalis ne contourne pas ses autorisations."
                 )
                 return
             }
@@ -1609,6 +1662,7 @@ class MainActivity : ComponentActivity() {
                     "status",
                     when {
                         definition.id == "health_connect" && healthStatus == "unavailable" -> "unavailable"
+                        definition.mode == "unsupported_android" -> "unsupported_android"
                         detected != null -> "connected"
                         installed != null -> "installed"
                         definition.id == "health_connect" -> healthStatus
@@ -1623,6 +1677,7 @@ class MainActivity : ComponentActivity() {
                     "action",
                     when {
                         definition.id == "health_connect" -> "authorize_health_connect"
+                        definition.mode == "unsupported_android" -> "unsupported_android"
                         installed != null && (definition.mode == "health_connect" || definition.mode == "bridge") ->
                             "authorize_via_health_connect"
                         installed != null -> "open_provider"
@@ -1714,8 +1769,18 @@ class MainActivity : ComponentActivity() {
         private const val LOCAL_URL = "https://$LOCAL_ASSET_HOST/assets/vitalis/index.html"
         private const val VITALIS_HOST = "vitalis-health-os.gillesarnaudasse65.chatgpt.site"
         private const val VITALIS_URL = "https://$VITALIS_HOST/"
+        private const val COACH_ASSET_PATH = "/__vitalis/coaches/"
+        private val COACH_ASSET_FILES = setOf(
+            "kofi.webp",
+            "ama.webp",
+            "ayo.webp",
+            "nia.webp",
+            "sekou.webp",
+            "zuri.webp"
+        )
         private const val REMOTE_LOAD_TIMEOUT_MS = 30_000L
         private const val REMOTE_RETRY_DELAY_MS = 2_000L
+        private const val CONNECTOR_RETURN_REFRESH_DELAY_MS = 700L
         private const val MAX_REMOTE_RETRIES = 2
         private const val MAX_SPEECH_TEXT_LENGTH = 8_000
         private const val MAX_AI_PROMPT_LENGTH = 4_000
