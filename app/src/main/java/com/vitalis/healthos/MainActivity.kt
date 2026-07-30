@@ -4,6 +4,9 @@ import android.Manifest
 import android.annotation.SuppressLint
 import android.app.Activity
 import android.content.ActivityNotFoundException
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Color
@@ -96,6 +99,35 @@ class MainActivity : ComponentActivity() {
     private var textToSpeechReady = false
     private var speechRecognizer: SpeechRecognizer? = null
     private var microphoneEnabled = false
+    private var selectedHealthDate: LocalDate = LocalDate.now()
+
+    private data class ConnectorDefinition(
+        val id: String,
+        val name: String,
+        val packages: List<String>,
+        val mode: String,
+        val note: String
+    )
+
+    private val connectorCatalog = listOf(
+        ConnectorDefinition("health_connect", "Health Connect", listOf("com.google.android.apps.healthdata"), "health_connect", "Autorisation Android native et centralisation des données."),
+        ConnectorDefinition("samsung_health", "Samsung Health", listOf("com.sec.android.app.shealth"), "health_connect", "Activez le partage Health Connect dans Samsung Health."),
+        ConnectorDefinition("google_fit", "Google Fit", listOf("com.google.android.apps.fitness"), "health_connect", "Utilisez Health Connect lorsque Google Fit le propose."),
+        ConnectorDefinition("mibro_fit", "Mibro Fit", listOf("com.xiaoxun.xunoversea", "com.zhencheng.mibrofit"), "bridge", "Le partage dépend de Mibro Fit, Google Fit ou Health Connect."),
+        ConnectorDefinition("fitbit", "Fitbit", listOf("com.fitbit.FitbitMobile"), "health_connect", "Activez Health Connect depuis les réglages Fitbit."),
+        ConnectorDefinition("garmin", "Garmin Connect", listOf("com.garmin.android.apps.connectmobile"), "provider", "Une autorisation Garmin officielle est requise si aucune donnée Health Connect n’est publiée."),
+        ConnectorDefinition("huawei", "Huawei Health", listOf("com.huawei.health"), "provider", "Une autorisation Huawei officielle est requise si aucune donnée Health Connect n’est publiée."),
+        ConnectorDefinition("strava", "Strava", listOf("com.strava"), "provider", "La connexion complète nécessite l’autorisation OAuth Strava."),
+        ConnectorDefinition("oura", "Oura", listOf("com.ouraring.oura"), "provider", "La connexion complète nécessite l’autorisation officielle Oura."),
+        ConnectorDefinition("whoop", "WHOOP", listOf("com.whoop.android"), "provider", "La connexion complète nécessite l’autorisation officielle WHOOP."),
+        ConnectorDefinition("withings", "Withings", listOf("com.withings.wiscale2"), "health_connect", "Activez Health Connect dans Withings lorsque disponible."),
+        ConnectorDefinition("myfitnesspal", "MyFitnessPal", listOf("com.myfitnesspal.android"), "provider", "L’accès nutritionnel dépend des autorisations du fournisseur."),
+        ConnectorDefinition("yazio", "YAZIO", listOf("com.yazio.android"), "provider", "L’accès nutritionnel dépend des autorisations du fournisseur."),
+        ConnectorDefinition("cronometer", "Cronometer", listOf("com.cronometer.android.gold"), "provider", "L’accès nutritionnel dépend des autorisations du fournisseur."),
+        ConnectorDefinition("lifesum", "Lifesum", listOf("com.sillens.shapeupclub"), "provider", "L’accès nutritionnel dépend des autorisations du fournisseur."),
+        ConnectorDefinition("suunto", "Suunto", listOf("com.stt.android.suunto"), "provider", "Une autorisation Suunto officielle peut être nécessaire."),
+        ConnectorDefinition("coros", "COROS", listOf("com.yf.smart.coros.dist"), "provider", "Une autorisation COROS officielle peut être nécessaire.")
+    )
 
     private val healthPermissions = setOf(
         HealthPermission.getReadPermission(StepsRecord::class),
@@ -184,7 +216,7 @@ class MainActivity : ComponentActivity() {
             settings.mediaPlaybackRequiresUserGesture = false
             settings.mixedContentMode = android.webkit.WebSettings.MIXED_CONTENT_NEVER_ALLOW
             settings.cacheMode = android.webkit.WebSettings.LOAD_DEFAULT
-            settings.userAgentString = settings.userAgentString + " VitalisAndroid/3.9"
+            settings.userAgentString = settings.userAgentString + " VitalisAndroid/3.12"
             WebView.setWebContentsDebuggingEnabled(BuildConfig.DEBUG)
             addJavascriptInterface(VitalisAndroidBridge(), "VitalisAndroid")
             webChromeClient = object : WebChromeClient() {
@@ -225,7 +257,7 @@ class MainActivity : ComponentActivity() {
                     }
                     if (host == VITALIS_HOST || host == LOCAL_ASSET_HOST) injectClassicCompatibility(view)
                     view.evaluateJavascript(
-                        "window.dispatchEvent(new CustomEvent('vitalis-native-ready',{detail:{platform:'android',version:'3.9'}}));",
+                        "window.dispatchEvent(new CustomEvent('vitalis-native-ready',{detail:{platform:'android',version:'3.12'}}));",
                         null
                     )
                     readHealthData()
@@ -265,7 +297,9 @@ class MainActivity : ComponentActivity() {
 
     private fun injectClassicCompatibility(view: WebView) {
         val script = runCatching {
-            assets.open("vitalis/compat.js").bufferedReader().use { it.readText() }
+            listOf("vitalis/compat.js", "vitalis/vitalis-3.12.js").joinToString("\n;\n") { asset ->
+                assets.open(asset).bufferedReader().use { it.readText() }
+            }
         }.getOrNull() ?: return
         view.evaluateJavascript(script, null)
     }
@@ -370,6 +404,11 @@ class MainActivity : ComponentActivity() {
         fun getConnectorStatus(): String = buildConnectorPayload(lastSourcePackages).toString()
 
         @JavascriptInterface
+        fun authorizeConnector(connectorId: String) {
+            runOnUiThread { handleConnectorAuthorization(connectorId.trim()) }
+        }
+
+        @JavascriptInterface
         fun getLastHealthData(): String = lastHealthPayload.toString()
 
         @JavascriptInterface
@@ -394,6 +433,27 @@ class MainActivity : ComponentActivity() {
         }
 
         @JavascriptInterface
+        fun hasDeveloperAiKey(): Boolean = readDeveloperOpenAiKey() != null
+
+        @JavascriptInterface
+        fun saveDeveloperAiKey(apiKey: String): Boolean {
+            val cleanKey = apiKey.trim()
+            if (!cleanKey.startsWith("sk-") || cleanKey.length < 30) return false
+            return runCatching {
+                writeEncryptedSecret(OPENAI_DEVELOPER_SECRET_NAME, cleanKey)
+                true
+            }.getOrDefault(false)
+        }
+
+        @JavascriptInterface
+        fun clearDeveloperAiKey() {
+            getSharedPreferences(SECURE_PREFS, MODE_PRIVATE)
+                .edit()
+                .remove(OPENAI_DEVELOPER_SECRET_NAME)
+                .apply()
+        }
+
+        @JavascriptInterface
         fun hasAiHealthConsent(): Boolean =
             getSharedPreferences(APP_PREFS, MODE_PRIVATE).getBoolean(AI_HEALTH_CONSENT, false)
 
@@ -407,16 +467,48 @@ class MainActivity : ComponentActivity() {
 
         @JavascriptInterface
         fun askKofi(prompt: String, requestId: String) {
-            requestKofi(prompt, requestId, null)
+            requestCoach(prompt, "general", requestId, null)
+        }
+
+        @JavascriptInterface
+        fun askCoach(prompt: String, coachId: String, requestId: String) {
+            requestCoach(prompt, coachId, requestId, null)
+        }
+
+        @JavascriptInterface
+        fun askDeveloper(prompt: String, requestId: String) {
+            requestDeveloper(prompt, requestId)
         }
 
         @JavascriptInterface
         fun analyzeMealImage(imageDataUrl: String, requestId: String) {
-            requestKofi(
-                "Analyse cette photo de repas. Estime prudemment les aliments, calories, glucides, protéines, lipides, fibres, sucre et sodium. Signale clairement les incertitudes et propose une amélioration simple.",
+            requestCoach(
+                "Analyse cette photo de repas et réponds uniquement avec un objet JSON valide, sans balises Markdown, " +
+                    "contenant exactement : name (texte), foods (tableau de textes), caloriesKcal, carbohydratesGrams, " +
+                    "proteinGrams, fatGrams, fiberGrams, sugarGrams, sodiumMilligrams (nombres positifs), confidence " +
+                    "(nombre de 0 à 1), summary (texte court) et improvement (texte court). Donne une estimation prudente " +
+                    "et mets 0 lorsqu’une valeur ne peut pas être estimée.",
+                "nutrition",
                 requestId,
                 imageDataUrl
             )
+        }
+
+        @JavascriptInterface
+        fun saveMealEstimate(estimateJson: String): Boolean =
+            saveManualMealEstimate(estimateJson)
+
+        @JavascriptInterface
+        fun sendDeveloperRequestToChatGpt(request: String) {
+            val cleanRequest = request.trim().take(MAX_DEVELOPER_PROMPT_LENGTH)
+            if (cleanRequest.isEmpty()) return
+            runOnUiThread {
+                val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                clipboard.setPrimaryClip(ClipData.newPlainText("Demande Vitalis", cleanRequest))
+                runCatching {
+                    startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(CHATGPT_WORK_URL)))
+                }
+            }
         }
 
         @JavascriptInterface
@@ -620,24 +712,89 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun requestKofi(prompt: String, requestId: String, imageDataUrl: String?) {
+    private fun requestCoach(
+        prompt: String,
+        coachId: String,
+        requestId: String,
+        imageDataUrl: String?
+    ) {
         val cleanPrompt = prompt.trim().take(MAX_AI_PROMPT_LENGTH)
         if (cleanPrompt.isEmpty()) {
-            dispatchAiResponse(requestId, false, "", "Question vide.")
+            dispatchAiResponse(requestId, false, "", "Question vide.", coachId)
             return
         }
         val apiKey = readOpenAiKey()
         if (apiKey == null) {
-            dispatchAiResponse(requestId, false, "", "Clé OpenAI non configurée.")
+            dispatchAiResponse(requestId, false, "", "Clé OpenAI non configurée.", coachId)
             return
         }
         val consented = getSharedPreferences(APP_PREFS, MODE_PRIVATE)
             .getBoolean(AI_HEALTH_CONSENT, false)
         if (!consented) {
-            dispatchAiResponse(requestId, false, "", "Consentement requis avant l’analyse des données santé.")
+            dispatchAiResponse(
+                requestId,
+                false,
+                "",
+                "Consentement requis avant l’analyse des données santé.",
+                coachId
+            )
             return
         }
-        val healthSnapshot = sanitizedHealthContext()
+        requestAi(
+            apiKey = apiKey,
+            instructions = coachInstructions(coachId),
+            prompt = cleanPrompt,
+            requestId = requestId,
+            imageDataUrl = imageDataUrl,
+            agentId = coachId,
+            includeHealthContext = true
+        )
+    }
+
+    private fun requestDeveloper(prompt: String, requestId: String) {
+        val cleanPrompt = prompt.trim().take(MAX_DEVELOPER_PROMPT_LENGTH)
+        if (cleanPrompt.isEmpty()) {
+            dispatchAiResponse(requestId, false, "", "Demande vide.", "developer")
+            return
+        }
+        val apiKey = readDeveloperOpenAiKey()
+        if (apiKey == null) {
+            dispatchAiResponse(
+                requestId,
+                false,
+                "",
+                "Clé « Vitalis Developer AI » non configurée sur cet appareil.",
+                "developer"
+            )
+            return
+        }
+        requestAi(
+            apiKey = apiKey,
+            instructions = DEVELOPER_INSTRUCTIONS,
+            prompt = cleanPrompt,
+            requestId = requestId,
+            imageDataUrl = null,
+            agentId = "developer",
+            includeHealthContext = false
+        )
+    }
+
+    private fun requestAi(
+        apiKey: String,
+        instructions: String,
+        prompt: String,
+        requestId: String,
+        imageDataUrl: String?,
+        agentId: String,
+        includeHealthContext: Boolean
+    ) {
+        val context = if (includeHealthContext) {
+            "\n\nDonnées Vitalis disponibles (peuvent être incomplètes) : ${sanitizedHealthContext()}"
+        } else {
+            "\n\nContexte technique : application Android Vitalis Mobile ${BuildConfig.VERSION_NAME}; " +
+                "interface classique à préserver; dépôt gillesarnaudasse65-web/Vitalis-Mobile; " +
+                "Health Connect natif; les changements réels exigent validation, modification du dépôt, tests et build GitHub Actions."
+        }
         lifecycleScope.launch(kotlinx.coroutines.Dispatchers.IO) {
             runCatching {
                 val inputContent = JSONArray().apply {
@@ -645,8 +802,7 @@ class MainActivity : ComponentActivity() {
                         put("type", "input_text")
                         put(
                             "text",
-                            "Question de l’utilisateur : $cleanPrompt\n\n" +
-                                "Données Vitalis disponibles (peuvent être incomplètes) : $healthSnapshot"
+                            "Demande de l’utilisateur : $prompt$context"
                         )
                     })
                     if (!imageDataUrl.isNullOrBlank() && imageDataUrl.startsWith("data:image/")) {
@@ -661,7 +817,7 @@ class MainActivity : ComponentActivity() {
                     put("model", OPENAI_MODEL)
                     put("max_output_tokens", 900)
                     put("store", false)
-                    put("instructions", KOFI_INSTRUCTIONS)
+                    put("instructions", instructions)
                     put("input", JSONArray().put(JSONObject().apply {
                         put("role", "user")
                         put("content", inputContent)
@@ -670,13 +826,14 @@ class MainActivity : ComponentActivity() {
                 val response = postOpenAi(apiKey, body)
                 extractResponseText(response)
             }.onSuccess { answer ->
-                dispatchAiResponse(requestId, true, answer, null)
+                dispatchAiResponse(requestId, true, answer, null, agentId)
             }.onFailure { error ->
                 dispatchAiResponse(
                     requestId,
                     false,
                     "",
-                    error.message?.take(300) ?: "Le service IA est momentanément indisponible."
+                    error.message?.take(300) ?: "Le service IA est momentanément indisponible.",
+                    agentId
                 )
             }
         }
@@ -729,12 +886,19 @@ class MainActivity : ComponentActivity() {
             ?: throw IllegalStateException("La réponse IA reçue est vide.")
     }
 
-    private fun dispatchAiResponse(requestId: String, ok: Boolean, text: String, error: String?) {
+    private fun dispatchAiResponse(
+        requestId: String,
+        ok: Boolean,
+        text: String,
+        error: String?,
+        agentId: String
+    ) {
         dispatchWebEvent("vitalis-ai-response", JSONObject().apply {
             put("requestId", requestId)
             put("ok", ok)
             put("text", text)
             put("error", error ?: JSONObject.NULL)
+            put("agentId", agentId)
             put("model", if (ok) OPENAI_MODEL else JSONObject.NULL)
         })
     }
@@ -756,6 +920,23 @@ class MainActivity : ComponentActivity() {
         runCatching { readEncryptedSecret(OPENAI_SECRET_NAME) }
             .getOrNull()
             ?.takeIf { it.startsWith("sk-") && it.length >= 30 }
+
+    private fun readDeveloperOpenAiKey(): String? =
+        runCatching { readEncryptedSecret(OPENAI_DEVELOPER_SECRET_NAME) }
+            .getOrNull()
+            ?.takeIf { it.startsWith("sk-") && it.length >= 30 }
+
+    private fun coachInstructions(coachId: String): String {
+        val identity = when (coachId.trim().lowercase(Locale.ROOT)) {
+            "nutrition" -> "Tu es Ama, coach nutrition. Concentre-toi sur les repas, macronutriments, portions, habitudes et objectifs réalistes."
+            "activity" -> "Tu es Ayo, coach activité. Concentre-toi sur les pas, séances, progression, charge et programme sportif adapté."
+            "sleep" -> "Tu es Nia, coach sommeil. Concentre-toi sur la durée, la régularité, l’hygiène du sommeil et la récupération nocturne."
+            "recovery" -> "Tu es Sékou, coach récupération. Concentre-toi sur la récupération, la fréquence cardiaque, l’hydratation et la charge d’activité."
+            "mental" -> "Tu es Zuri, coach bien-être mental. Concentre-toi sur le stress, la respiration, les habitudes et l’équilibre quotidien."
+            else -> "Tu es Kofi, coach santé global. Fais la synthèse des données Vitalis et priorise les actions à plus fort impact."
+        }
+        return "$identity $COACH_SAFETY_INSTRUCTIONS"
+    }
 
     private fun writeEncryptedSecret(name: String, value: String) {
         val cipher = Cipher.getInstance(KEYSTORE_TRANSFORMATION)
@@ -795,20 +976,199 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private fun saveManualMealEstimate(rawJson: String): Boolean {
+        val parsed = runCatching { JSONObject(rawJson.take(MAX_MEAL_ESTIMATE_JSON_LENGTH)) }.getOrNull()
+            ?: return false
+        val name = parsed.optString("name").trim().take(120).ifBlank { "Repas analysé" }
+        val selectedDate = parsed.optString("selectedDate")
+            .takeIf { it.isNotBlank() }
+            ?.let { runCatching { LocalDate.parse(it) }.getOrNull() }
+            ?: selectedHealthDate
+        val record = JSONObject().apply {
+            put("id", "scanner-${System.currentTimeMillis()}")
+            put("name", name)
+            put("selectedDate", selectedDate.toString())
+            put("recordedAt", Instant.now().toString())
+            put("caloriesKcal", nonNegativeNumber(parsed, "caloriesKcal"))
+            put("carbohydratesGrams", nonNegativeNumber(parsed, "carbohydratesGrams"))
+            put("proteinGrams", nonNegativeNumber(parsed, "proteinGrams"))
+            put("fatGrams", nonNegativeNumber(parsed, "fatGrams"))
+            put("fiberGrams", nonNegativeNumber(parsed, "fiberGrams"))
+            put("sugarGrams", nonNegativeNumber(parsed, "sugarGrams"))
+            put("sodiumMilligrams", nonNegativeNumber(parsed, "sodiumMilligrams"))
+            put("confidence", parsed.optDouble("confidence", 0.0).coerceIn(0.0, 1.0))
+            put("summary", parsed.optString("summary").trim().take(500))
+            put("improvement", parsed.optString("improvement").trim().take(500))
+            put("source", "Vitalis Scanner")
+        }
+        return runCatching {
+            val preferences = getSharedPreferences(APP_PREFS, MODE_PRIVATE)
+            val existing = runCatching {
+                JSONArray(preferences.getString(MANUAL_MEALS_KEY, "[]"))
+            }.getOrDefault(JSONArray())
+            val updated = JSONArray()
+            val first = (existing.length() - MAX_MANUAL_MEALS + 1).coerceAtLeast(0)
+            for (index in first until existing.length()) updated.put(existing.optJSONObject(index))
+            updated.put(record)
+            preferences.edit().putString(MANUAL_MEALS_KEY, updated.toString()).apply()
+            selectedHealthDate = selectedDate
+            readHealthData(selectedDate)
+            true
+        }.getOrDefault(false)
+    }
+
+    private fun nonNegativeNumber(source: JSONObject, key: String): Double {
+        val value = source.optDouble(key, 0.0)
+        return if (value.isFinite()) value.coerceAtLeast(0.0) else 0.0
+    }
+
+    private fun manualMealsForDate(date: LocalDate): List<JSONObject> {
+        val raw = getSharedPreferences(APP_PREFS, MODE_PRIVATE).getString(MANUAL_MEALS_KEY, "[]")
+        val records = runCatching { JSONArray(raw) }.getOrDefault(JSONArray())
+        return buildList {
+            for (index in 0 until records.length()) {
+                val item = records.optJSONObject(index) ?: continue
+                if (item.optString("selectedDate") == date.toString()) add(item)
+            }
+        }
+    }
+
+    private fun handleConnectorAuthorization(connectorId: String) {
+        val definition = connectorCatalog.firstOrNull { it.id == connectorId }
+        if (definition == null || definition.id == "health_connect") {
+            when (HealthConnectClient.getSdkStatus(this)) {
+                HealthConnectClient.SDK_AVAILABLE -> permissionLauncher.launch(healthPermissions)
+                HealthConnectClient.SDK_UNAVAILABLE_PROVIDER_UPDATE_REQUIRED -> openHealthConnectStore()
+                else -> notifyWeb(false, "unavailable", "Health Connect n’est pas disponible sur cet appareil.")
+            }
+            return
+        }
+        val packageName = definition.packages.firstOrNull(::isPackageInstalled)
+        if (packageName != null) {
+            val launchIntent = packageManager.getLaunchIntentForPackage(packageName)
+            if (launchIntent != null) {
+                startActivity(launchIntent)
+                notifyWeb(
+                    true,
+                    "connector_app_opened",
+                    "${definition.name} est ouvert. Activez son partage Health Connect ou son autorisation officielle."
+                )
+                return
+            }
+        }
+        openConnectorStore(definition.name)
+        notifyWeb(
+            false,
+            "connector_not_installed",
+            "${definition.name} n’a pas été détecté. La page d’installation est ouverte."
+        )
+    }
+
+    @Suppress("DEPRECATION")
+    private fun isPackageInstalled(packageName: String): Boolean = runCatching {
+        packageManager.getPackageInfo(packageName, 0)
+        true
+    }.getOrDefault(false)
+
+    private fun openConnectorStore(name: String) {
+        val query = Uri.encode(name)
+        try {
+            startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("market://search?q=$query&c=apps")))
+        } catch (_: ActivityNotFoundException) {
+            startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://play.google.com/store/search?q=$query&c=apps")))
+        }
+    }
+
+    private fun dispatchManualOnlyHealthData(selectedDate: LocalDate, syncStatus: String) {
+        val now = Instant.now()
+        val zone = ZoneId.systemDefault()
+        val today = LocalDate.now(zone)
+        val rangeStart = selectedDate.atStartOfDay(zone).toInstant()
+        val nextDayStart = selectedDate.plusDays(1).atStartOfDay(zone).toInstant()
+        val rangeEnd = if (selectedDate == today && now.isBefore(nextDayStart)) now else nextDayStart
+        val manualMeals = manualMealsForDate(selectedDate)
+        val scannerPackage = applicationContext.packageName
+        val nutritionSummary = buildNutritionSummary(emptyList(), manualMeals)
+        val details = buildDetailsPayload(
+            emptyList(),
+            emptyList(),
+            emptyList(),
+            emptyList(),
+            emptyList(),
+            emptyList(),
+            emptyList(),
+            emptyList(),
+            emptyList(),
+            emptyList(),
+            manualMeals
+        )
+        val scoreBreakdown = buildScoreBreakdown(
+            steps = 0,
+            sleepMinutes = 0,
+            exerciseMinutes = 0,
+            hydrationLitres = 0.0,
+            averageHeartRate = null,
+            nutrition = nutritionSummary
+        )
+        val sources = if (manualMeals.isEmpty()) emptyList() else listOf(scannerPackage)
+        val manualTimes = manualMeals.mapNotNull {
+            runCatching { Instant.parse(it.optString("recordedAt")) }.getOrNull()
+        }
+        val attributions = JSONObject().apply {
+            put("steps", attribution(emptyList()))
+            put("sleepMinutes", attribution(emptyList()))
+            put("exerciseMinutes", attribution(emptyList()))
+            put("averageHeartRate", attribution(emptyList()))
+            put("hydrationLitres", attribution(emptyList()))
+            put("distanceKm", attribution(emptyList()))
+            put("activeCalories", attribution(emptyList()))
+            put("oxygenPercent", attribution(emptyList()))
+            put("weightKg", attribution(emptyList()))
+            put("nutrition", attribution(manualTimes.map { scannerPackage to it }))
+        }
+        val payload = JSONObject().apply {
+            put("periodHours", 24)
+            put("selectedDate", selectedDate.toString())
+            put("rangeStart", rangeStart.toString())
+            put("rangeEnd", rangeEnd.toString())
+            put("steps", 0)
+            put("sleepMinutes", 0)
+            put("exerciseMinutes", 0)
+            put("averageHeartRate", JSONObject.NULL)
+            put("hydrationLitres", 0.0)
+            put("distanceKm", 0.0)
+            put("activeCalories", 0.0)
+            put("oxygenPercent", JSONObject.NULL)
+            put("weightKg", JSONObject.NULL)
+            put("nutrition", nutritionSummary)
+            put("details", details)
+            put("score", scoreBreakdown.getInt("overall"))
+            put("scoreBreakdown", scoreBreakdown)
+            put("attribution", attributions)
+            put("sources", JSONArray(sources))
+            put("connectorCount", sources.size)
+            put("syncedAt", now.toString())
+        }
+        lastSourcePackages = sources
+        lastHealthPayload = payload
+        dispatchConnectorStatus(sources)
+        dispatchHealthData(payload)
+        dispatchSyncState(syncStatus)
+    }
+
     private fun readHealthData(selectedDate: LocalDate = LocalDate.now()) {
+        selectedHealthDate = selectedDate
         val client = healthConnectClient
         if (client == null) {
-            dispatchConnectorStatus(emptyList())
-            dispatchSyncState("unavailable")
+            dispatchManualOnlyHealthData(selectedDate, "unavailable")
             return
         }
         dispatchSyncState("refreshing")
         lifecycleScope.launch {
             val granted = client.permissionController.getGrantedPermissions()
-            if (granted.intersect(healthPermissions).isEmpty()) {
+            val hasAnyHealthPermission = granted.intersect(healthPermissions).isNotEmpty()
+            if (!hasAnyHealthPermission) {
                 dispatchConnectorStatus(emptyList())
-                dispatchSyncState("permission_required")
-                return@launch
             }
             runCatching {
                 val now = Instant.now()
@@ -840,7 +1200,25 @@ class MainActivity : ComponentActivity() {
                 val oxygenDay = if (HealthPermission.getReadPermission(OxygenSaturationRecord::class) in granted) client.readRecords(ReadRecordsRequest(OxygenSaturationRecord::class, selectedDay)).records else emptyList()
                 val weightDay = if (HealthPermission.getReadPermission(WeightRecord::class) in granted) client.readRecords(ReadRecordsRequest(WeightRecord::class, selectedDay)).records else emptyList()
                 val nutritionDay = if (HealthPermission.getReadPermission(NutritionRecord::class) in granted) client.readRecords(ReadRecordsRequest(NutritionRecord::class, selectedDay)).records else emptyList()
-                val sources = (recentSources + stepsDay.map { it.metadata.dataOrigin.packageName } + sleepDay.map { it.metadata.dataOrigin.packageName } + exerciseDay.map { it.metadata.dataOrigin.packageName } + heartDay.map { it.metadata.dataOrigin.packageName } + hydrationDay.map { it.metadata.dataOrigin.packageName } + distanceDay.map { it.metadata.dataOrigin.packageName } + activeCaloriesDay.map { it.metadata.dataOrigin.packageName } + oxygenDay.map { it.metadata.dataOrigin.packageName } + weightDay.map { it.metadata.dataOrigin.packageName } + nutritionDay.map { it.metadata.dataOrigin.packageName }).filter { it.isNotBlank() }.distinct()
+                val manualMeals = manualMealsForDate(selectedDate)
+                val scannerPackage = applicationContext.packageName
+                val manualMealTimes = manualMeals.mapNotNull {
+                    runCatching { Instant.parse(it.optString("recordedAt")) }.getOrNull()
+                }
+                val sources = (
+                    recentSources +
+                        stepsDay.map { it.metadata.dataOrigin.packageName } +
+                        sleepDay.map { it.metadata.dataOrigin.packageName } +
+                        exerciseDay.map { it.metadata.dataOrigin.packageName } +
+                        heartDay.map { it.metadata.dataOrigin.packageName } +
+                        hydrationDay.map { it.metadata.dataOrigin.packageName } +
+                        distanceDay.map { it.metadata.dataOrigin.packageName } +
+                        activeCaloriesDay.map { it.metadata.dataOrigin.packageName } +
+                        oxygenDay.map { it.metadata.dataOrigin.packageName } +
+                        weightDay.map { it.metadata.dataOrigin.packageName } +
+                        nutritionDay.map { it.metadata.dataOrigin.packageName } +
+                        if (manualMeals.isNotEmpty()) listOf(scannerPackage) else emptyList()
+                    ).filter { it.isNotBlank() }.distinct()
                 val attributions = JSONObject().apply {
                     put("steps", attribution(stepsDay.map { it.metadata.dataOrigin.packageName to it.endTime }))
                     put("sleepMinutes", attribution(sleepDay.map { it.metadata.dataOrigin.packageName to it.endTime }))
@@ -851,12 +1229,30 @@ class MainActivity : ComponentActivity() {
                     put("activeCalories", attribution(activeCaloriesDay.map { it.metadata.dataOrigin.packageName to it.endTime }))
                     put("oxygenPercent", attribution(oxygenDay.map { it.metadata.dataOrigin.packageName to it.time }))
                     put("weightKg", attribution(weightDay.map { it.metadata.dataOrigin.packageName to it.time }))
-                    put("nutrition", attribution(nutritionDay.map { it.metadata.dataOrigin.packageName to it.endTime }))
+                    put(
+                        "nutrition",
+                        attribution(
+                            nutritionDay.map { it.metadata.dataOrigin.packageName to it.endTime } +
+                                manualMealTimes.map { scannerPackage to it }
+                        )
+                    )
                 }
                 val samples = heartDay.flatMap { it.samples }
                 val averageHeartRate = if (samples.isEmpty()) null else samples.map { it.beatsPerMinute }.average().roundToInt()
-                val nutritionSummary = buildNutritionSummary(nutritionDay)
-                val details = buildDetailsPayload(stepsDay, sleepDay, exerciseDay, heartDay, hydrationDay, distanceDay, activeCaloriesDay, oxygenDay, weightDay, nutritionDay)
+                val nutritionSummary = buildNutritionSummary(nutritionDay, manualMeals)
+                val details = buildDetailsPayload(
+                    stepsDay,
+                    sleepDay,
+                    exerciseDay,
+                    heartDay,
+                    hydrationDay,
+                    distanceDay,
+                    activeCaloriesDay,
+                    oxygenDay,
+                    weightDay,
+                    nutritionDay,
+                    manualMeals
+                )
                 val scoreBreakdown = buildScoreBreakdown(
                     stepsDay.sumOf { it.count },
                     sleepDay.sumOf { Duration.between(it.startTime, it.endTime).toMinutes() },
@@ -892,7 +1288,7 @@ class MainActivity : ComponentActivity() {
                 lastHealthPayload = payload
                 dispatchConnectorStatus(sources)
                 dispatchHealthData(payload)
-                dispatchSyncState("complete")
+                dispatchSyncState(if (hasAnyHealthPermission) "complete" else "permission_required")
             }.onFailure { error ->
                 dispatchSyncState("error", error.message)
                 notifyWeb(false, "sync_error", error.message ?: "Synchronisation impossible")
@@ -900,7 +1296,10 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun buildNutritionSummary(records: List<NutritionRecord>): JSONObject {
+    private fun buildNutritionSummary(
+        records: List<NutritionRecord>,
+        manualMeals: List<JSONObject>
+    ): JSONObject {
         val goals = JSONObject().apply {
             put("caloriesKcal", 2093.0)
             put("carbohydratesGrams", 183.0)
@@ -911,14 +1310,42 @@ class MainActivity : ComponentActivity() {
             put("sodiumMilligrams", 2300.0)
         }
         return JSONObject().apply {
-            put("mealCount", records.size)
-            put("caloriesKcal", records.sumOf { it.energy?.inKilocalories ?: 0.0 })
-            put("carbohydratesGrams", records.sumOf { it.totalCarbohydrate?.inGrams ?: 0.0 })
-            put("proteinGrams", records.sumOf { it.protein?.inGrams ?: 0.0 })
-            put("fatGrams", records.sumOf { it.totalFat?.inGrams ?: 0.0 })
-            put("fiberGrams", records.sumOf { it.dietaryFiber?.inGrams ?: 0.0 })
-            put("sugarGrams", records.sumOf { it.sugar?.inGrams ?: 0.0 })
-            put("sodiumMilligrams", records.sumOf { (it.sodium?.inGrams ?: 0.0) * 1000.0 })
+            put("mealCount", records.size + manualMeals.size)
+            put(
+                "caloriesKcal",
+                records.sumOf { it.energy?.inKilocalories ?: 0.0 } +
+                    manualMeals.sumOf { it.optDouble("caloriesKcal", 0.0) }
+            )
+            put(
+                "carbohydratesGrams",
+                records.sumOf { it.totalCarbohydrate?.inGrams ?: 0.0 } +
+                    manualMeals.sumOf { it.optDouble("carbohydratesGrams", 0.0) }
+            )
+            put(
+                "proteinGrams",
+                records.sumOf { it.protein?.inGrams ?: 0.0 } +
+                    manualMeals.sumOf { it.optDouble("proteinGrams", 0.0) }
+            )
+            put(
+                "fatGrams",
+                records.sumOf { it.totalFat?.inGrams ?: 0.0 } +
+                    manualMeals.sumOf { it.optDouble("fatGrams", 0.0) }
+            )
+            put(
+                "fiberGrams",
+                records.sumOf { it.dietaryFiber?.inGrams ?: 0.0 } +
+                    manualMeals.sumOf { it.optDouble("fiberGrams", 0.0) }
+            )
+            put(
+                "sugarGrams",
+                records.sumOf { it.sugar?.inGrams ?: 0.0 } +
+                    manualMeals.sumOf { it.optDouble("sugarGrams", 0.0) }
+            )
+            put(
+                "sodiumMilligrams",
+                records.sumOf { (it.sodium?.inGrams ?: 0.0) * 1000.0 } +
+                    manualMeals.sumOf { it.optDouble("sodiumMilligrams", 0.0) }
+            )
             put("goals", goals)
         }
     }
@@ -933,7 +1360,8 @@ class MainActivity : ComponentActivity() {
         activeCalories: List<ActiveCaloriesBurnedRecord>,
         oxygen: List<OxygenSaturationRecord>,
         weight: List<WeightRecord>,
-        nutrition: List<NutritionRecord>
+        nutrition: List<NutritionRecord>,
+        manualMeals: List<JSONObject>
     ): JSONObject = JSONObject().apply {
         put("activity", JSONArray(exercise.sortedByDescending { it.endTime }.take(50).map { record ->
             JSONObject().apply {
@@ -948,7 +1376,7 @@ class MainActivity : ComponentActivity() {
                 put("packageName", record.metadata.dataOrigin.packageName)
             }
         }))
-        put("nutrition", JSONArray(nutrition.sortedByDescending { it.endTime }.take(50).map { record ->
+        val connectedMeals = nutrition.sortedByDescending { it.endTime }.take(50).map { record ->
             JSONObject().apply {
                 put("name", record.name ?: "Repas")
                 put("mealType", record.mealType)
@@ -965,7 +1393,28 @@ class MainActivity : ComponentActivity() {
                 put("connector", sourceLabel(record.metadata.dataOrigin.packageName))
                 put("packageName", record.metadata.dataOrigin.packageName)
             }
-        }))
+        }
+        val scannedMeals = manualMeals.map { record ->
+            JSONObject().apply {
+                put("name", record.optString("name", "Repas analysé"))
+                put("mealType", 0)
+                put("caloriesKcal", record.optDouble("caloriesKcal", 0.0))
+                put("carbohydratesGrams", record.optDouble("carbohydratesGrams", 0.0))
+                put("proteinGrams", record.optDouble("proteinGrams", 0.0))
+                put("fatGrams", record.optDouble("fatGrams", 0.0))
+                put("fiberGrams", record.optDouble("fiberGrams", 0.0))
+                put("sugarGrams", record.optDouble("sugarGrams", 0.0))
+                put("sodiumMilligrams", record.optDouble("sodiumMilligrams", 0.0))
+                put("confidence", record.optDouble("confidence", 0.0))
+                put("summary", record.optString("summary"))
+                put("improvement", record.optString("improvement"))
+                put("startTime", record.optString("recordedAt"))
+                put("endTime", record.optString("recordedAt"))
+                put("connector", "Vitalis Scanner")
+                put("packageName", applicationContext.packageName)
+            }
+        }
+        put("nutrition", JSONArray((connectedMeals + scannedMeals).take(100)))
         put("sleep", JSONArray(sleep.sortedByDescending { it.endTime }.take(50).map { record ->
             JSONObject().apply {
                 put("durationMinutes", Duration.between(record.startTime, record.endTime).toMinutes())
@@ -1127,13 +1576,53 @@ class MainActivity : ComponentActivity() {
             else -> "unavailable"
         }
         val packages = sourcePackages.filter { it.isNotBlank() }.distinct()
+        val catalogItems = connectorCatalog.map { definition ->
+            val detected = definition.packages.firstOrNull { it in packages }
+            val installed = definition.packages.firstOrNull(::isPackageInstalled)
+            JSONObject().apply {
+                put("id", definition.id)
+                put("name", definition.name)
+                put(
+                    "status",
+                    when {
+                        definition.id == "health_connect" && healthStatus == "unavailable" -> "unavailable"
+                        detected != null -> "connected"
+                        installed != null -> "installed"
+                        definition.id == "health_connect" -> healthStatus
+                        else -> "not_installed"
+                    }
+                )
+                put("mode", definition.mode)
+                put("packageName", detected ?: installed ?: definition.packages.firstOrNull().orEmpty())
+                put("detectedData", detected != null)
+                put("installed", installed != null)
+                put(
+                    "action",
+                    when {
+                        definition.id == "health_connect" -> "authorize_health_connect"
+                        installed != null -> "open_provider"
+                        else -> "install_provider"
+                    }
+                )
+                put("note", definition.note)
+            }
+        }
+        val catalogPackages = connectorCatalog.flatMap { it.packages }.toSet()
+        val dynamicItems = packages.filterNot { it in catalogPackages }.map { packageName ->
+            connector(sourceLabel(packageName), "connected", "health_connect", packageName).apply {
+                put("id", packageName)
+                put("detectedData", true)
+                put("installed", isPackageInstalled(packageName))
+                put("action", "manage_health_connect")
+                put("note", "Source détectée automatiquement dans Health Connect.")
+            }
+        }
         return JSONObject().apply {
             put("healthConnect", healthStatus)
             put("unlimitedDiscovery", true)
             put("connectorCount", packages.size)
-            put("connectors", JSONArray().apply {
-                packages.forEach { packageName -> put(connector(sourceLabel(packageName), "connected", "health_connect", packageName)) }
-            })
+            put("catalogCount", catalogItems.size + dynamicItems.size)
+            put("connectors", JSONArray(catalogItems + dynamicItems))
             put("sourcePackages", JSONArray(packages))
         }
     }
@@ -1205,21 +1694,33 @@ class MainActivity : ComponentActivity() {
         private const val MAX_REMOTE_RETRIES = 2
         private const val MAX_SPEECH_TEXT_LENGTH = 8_000
         private const val MAX_AI_PROMPT_LENGTH = 4_000
+        private const val MAX_DEVELOPER_PROMPT_LENGTH = 8_000
         private const val MAX_IMAGE_DATA_URL_LENGTH = 6_000_000
+        private const val MAX_MEAL_ESTIMATE_JSON_LENGTH = 24_000
+        private const val MAX_MANUAL_MEALS = 500
         private const val OPENAI_RESPONSES_URL = "https://api.openai.com/v1/responses"
         private const val OPENAI_MODEL = "gpt-5.6"
+        private const val CHATGPT_WORK_URL = "https://chatgpt.com/codex"
         private const val APP_PREFS = "vitalis_preferences"
         private const val SECURE_PREFS = "vitalis_secure_preferences"
         private const val OPENAI_SECRET_NAME = "openai_api_key"
+        private const val OPENAI_DEVELOPER_SECRET_NAME = "openai_developer_api_key"
         private const val AI_HEALTH_CONSENT = "ai_health_consent"
+        private const val MANUAL_MEALS_KEY = "manual_meal_estimates"
         private const val ANDROID_KEYSTORE = "AndroidKeyStore"
         private const val KEYSTORE_ALIAS = "vitalis_openai_key_v1"
         private const val KEYSTORE_TRANSFORMATION = "AES/GCM/NoPadding"
-        private const val KOFI_INSTRUCTIONS =
-            "Tu es Kofi, coach bien-être de Vitalis. Réponds en français clair, chaleureux et concret. " +
-                "Analyse uniquement les données fournies, indique les données manquantes et cite les connecteurs " +
-                "visibles quand ils sont disponibles. Ne pose aucun diagnostic et ne remplace jamais un professionnel " +
-                "de santé. Pour un symptôme grave ou urgent, recommande immédiatement de contacter les services " +
-                "d’urgence locaux. Donne au maximum trois priorités réalistes et explique brièvement pourquoi."
+        private const val COACH_SAFETY_INSTRUCTIONS =
+            "Réponds en français clair, professionnel, chaleureux et concret. Analyse uniquement les données fournies, " +
+                "indique les données manquantes et cite les connecteurs visibles. Ne pose aucun diagnostic et ne remplace " +
+                "jamais un professionnel de santé. Pour un symptôme grave ou urgent, recommande immédiatement de contacter " +
+                "les services d’urgence locaux. Donne au maximum trois priorités réalistes et explique brièvement pourquoi."
+        private const val DEVELOPER_INSTRUCTIONS =
+            "Tu es Vitalis Developer AI, assistant technique senior de l’application Vitalis Mobile. Aide l’utilisateur " +
+                "à transformer un besoin en demande de modification structurée : objectif, comportement attendu, fichiers " +
+                "ou modules probables, permissions ou connecteurs nécessaires, risques, critères de test et validation. " +
+                "Préserve toujours l’interface classique existante sauf demande explicite contraire. Ne prétends jamais " +
+                "avoir modifié, compilé ou publié le dépôt : les changements réels sont exécutés dans ChatGPT Work/Codex " +
+                "avec accès GitHub et validation de l’utilisateur. N’affiche et ne demande jamais une clé API."
     }
 }
