@@ -70,6 +70,15 @@ La clé reste chiffrée sur l’appareil. La supprimer depuis les réglages IA r
 
 Une compilation est lancée automatiquement à chaque mise à jour de `main`.
 
+## Vitalis 3.14 — correction coachs et connecteurs
+
+- Les six portraits de coach sont désormais servis localement par l’APK, y compris lorsque l’interface en ligne est affichée.
+- Les libellés **Choisir**, **Changer**, **Sélectionner** et **Ouvrir le coach** ouvrent tous le catalogue ou la conversation attendue.
+- Le centre des connecteurs couvre aussi Health Sync, Welmi, FitOn, Fitify, FlexMe, TrainingPeaks, Zwift, Peloton, Freeletics, Komoot, Headspace, Calm, Sleep Cycle et Welltory.
+- Une application compatible Health Connect suit le parcours **Autoriser et ouvrir**.
+- Une application utilisant son propre compte suit le parcours **Autoriser via l’application** sans simuler une connexion que le fournisseur n’a pas accordée.
+- Apple Health reste visible avec un statut explicite : ce service iOS n’est pas accessible directement depuis Android.
+
 ## Vitalis 3.11 — coachs et actualisation
 
 - Tous les coachs spécialisés sont de nouveau accessibles : santé globale, nutrition, activité, sommeil, récupération et bien-être mental.

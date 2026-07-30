@@ -3,7 +3,9 @@
   window.__vitalisPowerLayer312 = true;
 
   var bridge = window.VitalisAndroid || null;
-  var ASSET_BASE = "https://appassets.androidplatform.net/assets/vitalis/coaches/";
+  var ASSET_BASE = location.hostname === "vitalis-health-os.gillesarnaudasse65.chatgpt.site"
+    ? location.origin + "/__vitalis/coaches/"
+    : "https://appassets.androidplatform.net/assets/vitalis/coaches/";
   var SELECTED_COACH_KEY = "vitalis-selected-coach-v312";
   var selectedCoachId = localStorage.getItem(SELECTED_COACH_KEY) || "general";
   var voiceOn = true;
@@ -98,6 +100,7 @@
       ".vitalis-meal-grid-312{display:grid;grid-template-columns:1fr 1fr;gap:9px}.vitalis-meal-grid-312 label{font-size:11px;color:#687970}.vitalis-meal-grid-312 input{width:100%;box-sizing:border-box;margin-top:4px;border:1px solid #cad7d1;border-radius:11px;padding:10px;background:#fff}" +
       ".vitalis-connector-card-312{background:#fff;border:1px solid #dce5e1;border-radius:16px;padding:13px;margin:9px 0}.vitalis-connector-top-312{display:flex;justify-content:space-between;gap:10px;align-items:center}" +
       ".vitalis-connector-card-312 small{display:block;color:#677a72;line-height:1.4;margin:6px 0}.vitalis-connector-action-312{border:0;border-radius:999px;padding:8px 11px;background:#063c30;color:#fff;font-size:11px;font-weight:800}" +
+      ".vitalis-connector-action-312[disabled]{background:#dfe5e2;color:#708078}" +
       ".vitalis-status-312{border-radius:999px;padding:5px 8px;font-size:10px;font-weight:800;background:#edf1ef;color:#52645d}.vitalis-status-312.connected{background:#dff4e7;color:#075f45}.vitalis-status-312.installed{background:#fff1c9;color:#775b00}";
     document.head.appendChild(style);
   }
@@ -132,7 +135,7 @@
     Array.prototype.slice.call(document.querySelectorAll("button,a,[role='button']")).forEach(function (button) {
       var label = norm((button.innerText || button.textContent || "") + " " +
         (button.getAttribute("aria-label") || ""));
-      if (/changer.*coach|change.*coach/.test(label)) {
+      if (/changer.*coach|change.*coach|choisir.*coach|selectionner.*coach/.test(label)) {
         button.style.removeProperty("display");
         var host = button.closest("article,section") || button.parentElement;
         if (host && hosts.indexOf(host) < 0) hosts.push(host);
@@ -483,7 +486,8 @@
   function statusLabel(status) {
     return {
       connected:"Connecté", installed:"Installé", available:"À autoriser",
-      update_required:"À mettre à jour", unavailable:"Indisponible", not_installed:"Non installé"
+      update_required:"À mettre à jour", unavailable:"Indisponible",
+      unsupported_android:"Indisponible sur Android", not_installed:"Non installé"
     }[status] || "À configurer";
   }
 
@@ -491,7 +495,8 @@
     if (item.status === "connected") return "Gérer";
     if (item.action === "authorize_health_connect") return "Autoriser";
     if (item.action === "authorize_via_health_connect") return "Autoriser et ouvrir";
-    if (item.action === "open_provider") return "Ouvrir l’application";
+    if (item.action === "open_provider") return "Autoriser via l’application";
+    if (item.action === "unsupported_android") return "Non disponible sur Android";
     return "Installer";
   }
 
@@ -503,12 +508,13 @@
         esc(item.name || item.packageName) + '</b><span class="vitalis-status-312 ' + esc(item.status) + '">' +
         esc(statusLabel(item.status)) + '</span></div><small>' + esc(item.note || "Source détectée automatiquement.") +
         '</small><button class="vitalis-connector-action-312" data-connector-312="' + esc(item.id || item.packageName) +
-        '">' + esc(actionLabel(item)) + "</button></div>";
+        '" ' + (item.action === "unsupported_android" ? "disabled" : "") + ">" +
+        esc(actionLabel(item)) + "</button></div>";
     }).join("");
     var root = overlay(
       '<div><h3>Connecteurs et autorisations</h3><div class="vitalis-agent-chip-312">' +
       Number(connectorState.connectorCount || 0) + " source(s) avec données</div></div>",
-      '<p class="vitalis-ai-note">« Autoriser et ouvrir » demande d’abord les permissions Health Connect à Vitalis, puis ouvre l’application afin que vous activiez son partage. Une application sans passerelle Health Connect exige sa propre autorisation officielle.</p>' +
+      '<p class="vitalis-ai-note">« Autoriser et ouvrir » demande d’abord les permissions Health Connect à Vitalis, puis ouvre l’application afin que vous activiez son partage. « Autoriser via l’application » ouvre le service pour utiliser uniquement son intégration officielle.</p>' +
       (cards || '<div class="vitalis-deep-empty">Aucun connecteur disponible.</div>')
     );
     root.addEventListener("click", function (event) {
@@ -577,11 +583,11 @@
     if (!target || target.closest(".vitalis-power-overlay-312")) return;
     var label = norm((target.innerText || target.textContent || "") + " " +
       (target.getAttribute("aria-label") || "") + " " + (target.getAttribute("title") || ""));
-    if (/changer.*coach|change.*coach|tous.*coach|mes.*coach|equipe.*coach/.test(label)) {
+    if (/changer.*coach|change.*coach|choisir.*coach|selectionner.*coach|tous.*coach|mes.*coach|equipe.*coach/.test(label)) {
       event.preventDefault();
       event.stopImmediatePropagation();
       showCoachCatalog();
-    } else if (/parler.*coach|coach.*vitalis.*ai|ouvrir.*coach|demarrer.*direct/.test(label)) {
+    } else if (/parler.*coach|parler.*(kofi|ama|ayo|nia|sekou|zuri)|coach.*vitalis.*ai|ouvrir.*coach|demarrer.*direct/.test(label)) {
       event.preventDefault();
       event.stopImmediatePropagation();
       openCoach(selectedCoachId);
