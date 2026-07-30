@@ -76,3 +76,21 @@ Une compilation est lancée automatiquement à chaque mise à jour de `main`.
 - L’accueil conserve un seul coach principal afin d’éviter les doublons ; le catalogue complet reste accessible depuis l’espace Coach.
 - Le bouton **Actualiser les données** relance la synchronisation pour la date sélectionnée et actualise cartes, nutrition, score et sources.
 - L’état de synchronisation est visible : actualisation en cours, réussite horodatée ou possibilité de réessayer.
+
+## Vitalis 3.12 — coachs humains, connecteurs et Developer AI
+
+- L’interface classique et sa navigation restent inchangées.
+- Six coachs IA sont sélectionnables : Kofi, Ama, Ayo, Nia, Sékou et Zuri.
+- Chaque coach dispose d’un portrait humain local, d’une spécialité, d’une conversation et d’instructions IA propres.
+- Le coach choisi est mémorisé et réappliqué sur l’accueil et dans la conversation.
+- Le centre des connecteurs distingue désormais :
+  - **Connecté** : des données de cette source sont réellement présentes dans Health Connect ;
+  - **Installé** : l’application est détectée et peut être ouverte pour autoriser son partage ;
+  - **À autoriser** : Vitalis doit encore recevoir les permissions Health Connect ;
+  - **Configuration fournisseur requise** : l’API ou l’OAuth officiel du fournisseur est nécessaire.
+- Aucun abonnement ou compte d’une autre application n’est contourné. Vitalis utilise les autorisations Android et fournisseur prévues à cet effet.
+- Le scanner nutritionnel renvoie une estimation modifiable des calories, glucides, protéines, lipides, fibres, sucre et sodium.
+- Après validation, l’estimation est enregistrée dans l’espace Nutrition avec la source **Vitalis Scanner** et intégrée au détail du jour.
+- **Vitalis Developer AI** utilise une clé séparée, prépare une demande technique structurée et peut la transférer vers ChatGPT Work.
+- Le transfert vers ChatGPT Work copie la demande et ouvre l’espace Codex. Les modifications réelles restent soumises à validation, accès GitHub, tests et compilation.
+- Aucune clé OpenAI n’est incluse dans l’APK ou le dépôt.

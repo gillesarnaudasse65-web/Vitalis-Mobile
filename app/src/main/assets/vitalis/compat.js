@@ -779,7 +779,7 @@
     var floatingCoach = document.querySelector(".agent-fab");
     if (floatingCoach) floatingCoach.style.display = "none";
     document.querySelectorAll("button").forEach(function (button) {
-      if (/changer de coach/.test(plain(button.innerText || button.textContent))) button.style.display = "none";
+      if (/changer de coach/.test(plain(button.innerText || button.textContent))) button.style.removeProperty("display");
     });
     var nutritionCard = document.querySelector("article.coach-card");
     var signature = JSON.stringify(currentData.nutrition || {}) + "|" + (currentData.selectedDate || "");
@@ -1257,8 +1257,8 @@
       var day = selectedDay();
       window.dispatchEvent(new CustomEvent("vitalis-selected-date-change", { detail: { date: day, force: true } }));
       document.dispatchEvent(new CustomEvent("vitalis-selected-date-change", { detail: { date: day, force: true } }));
-      if (bridge && bridge.setSelectedDate) bridge.setSelectedDate(day);
-      if (bridge && bridge.refreshHealthData) bridge.refreshHealthData();
+      if (bridge && bridge.refreshHealthDataForDate) bridge.refreshHealthDataForDate(day);
+      else if (bridge && bridge.refreshHealthData) bridge.refreshHealthData();
       else if (window.VitalisNativeActions && window.VitalisNativeActions.refreshHealthData) {
         window.VitalisNativeActions.refreshHealthData();
       }
@@ -1309,7 +1309,12 @@
     if (!target) return;
     var label = norm((target.innerText || "") + " " + (target.getAttribute("aria-label") || ""));
     if (/tous.*coach|mes.*coach|voir.*coach|equipe.*coach/.test(label)) {
-      event.preventDefault(); event.stopImmediatePropagation(); showCoaches();
+      event.preventDefault(); event.stopImmediatePropagation();
+      if (window.__vitalisPowerLayer312 && window.VitalisCoaches && window.VitalisCoaches.open) {
+        window.VitalisCoaches.open();
+      } else {
+        showCoaches();
+      }
     }
   }, true);
 
