@@ -105,7 +105,7 @@ No records or totals are accumulated across refreshes. A repeated read rebuilds 
 | Layer | Run 3 coverage |
 |---|---|
 | JavaScript/source contracts | Paging applied to all relevant calls, explicit state/metric payload, generation guard, unused permissions absent, WebView status rendering and no zero substitution |
-| JVM | Provider availability; never requested/denied/partial/full/revoked permissions; normal/leap/month/year/DST intervals; one/two/many/empty-final pages; within/across-page deduplication; equal values with distinct IDs; later replacement of a stable ID; repeated-token guard; later-page permission failure; zero/no-data/auth/unsupported/error metric states; repeated sync; stale response rejection |
+| JVM | Provider availability; never requested/denied/partial/full/revoked permissions; normal/leap/month/year/DST intervals; one/two/many pages; empty first/final pages; within/across-page deduplication; equal values with distinct IDs; later replacement of a stable ID; repeated-token guard; later-page permission failure; cancellation propagation; zero/no-data/auth/unsupported/error metric states; repeated sync; stale response rejection |
 | Android 15 instrumentation | Existing offline smoke and Run 2 coach/date flow, plus the Run 3 production-script fixture with partial permissions, visible missing-authorization state, pointer refresh/Today actions and selected-date recreation |
 
 The Run 3 fixture uses the real production injection and Android bridge but synthetic permission/status payloads. It deliberately does not access a user's Health Connect provider or fabricate health records. This proves the state/UI contract, not provider interoperability.
