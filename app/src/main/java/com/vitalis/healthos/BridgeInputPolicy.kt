@@ -23,9 +23,10 @@ internal object BridgeInputPolicy {
             "data:image/png;base64,",
             "data:image/webp;base64,"
         ).firstOrNull(raw::startsWith) ?: return false
-        return raw.substring(prefix.length).all {
-                it.isLetterOrDigit() || it == '+' || it == '/' || it == '='
-            }
+        val payload = raw.substring(prefix.length)
+        return payload.length <= NutritionImagePolicy.MAX_BASE64_CHARACTERS && payload.all {
+            it.isLetterOrDigit() || it == '+' || it == '/' || it == '='
+        }
     }
 
     fun apiKey(raw: String?): Boolean = raw != null && raw.length in 30..512 && raw.startsWith("sk-")
