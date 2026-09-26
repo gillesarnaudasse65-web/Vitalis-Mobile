@@ -8,6 +8,8 @@ import android.graphics.Color
 import android.graphics.ImageDecoder
 import android.net.Uri
 import android.util.Base64
+import androidx.core.graphics.createBitmap
+import androidx.core.graphics.scale
 import java.io.ByteArrayOutputStream
 import java.nio.ByteBuffer
 
@@ -116,7 +118,7 @@ class SafeNutritionImageProcessor(private val context: Context) {
 
     private fun flattenOnWhite(source: Bitmap): Bitmap {
         if (!source.hasAlpha()) return source
-        return Bitmap.createBitmap(source.width, source.height, Bitmap.Config.ARGB_8888).also { target ->
+        return createBitmap(source.width, source.height, Bitmap.Config.ARGB_8888).also { target ->
             Canvas(target).apply {
                 drawColor(Color.WHITE)
                 drawBitmap(source, 0f, 0f, null)
@@ -138,7 +140,7 @@ class SafeNutritionImageProcessor(private val context: Context) {
                 }
                 val nextWidth = (working.width * 0.8).toInt().coerceAtLeast(1)
                 val nextHeight = (working.height * 0.8).toInt().coerceAtLeast(1)
-                val smaller = Bitmap.createScaledBitmap(working, nextWidth, nextHeight, true)
+                val smaller = working.scale(nextWidth, nextHeight)
                 if (ownsWorking) working.recycle()
                 working = smaller
                 ownsWorking = true

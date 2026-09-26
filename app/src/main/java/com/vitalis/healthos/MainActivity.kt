@@ -46,6 +46,7 @@ import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
+import androidx.core.graphics.createBitmap
 import androidx.health.connect.client.HealthConnectClient
 import androidx.health.connect.client.PermissionController
 import androidx.health.connect.client.permission.HealthPermission
@@ -254,8 +255,10 @@ class MainActivity : ComponentActivity() {
         nutritionImageProcessor = SafeNutritionImageProcessor(this)
         nutritionMealStore = NutritionMealStore(object : NutritionStringStorage {
             override fun read(): String? = appPreferences.getString(MANUAL_MEALS_KEY, "[]")
+            @SuppressLint("UseKtx")
             override fun write(value: String): Boolean =
                 appPreferences.edit().putString(MANUAL_MEALS_KEY, value).commit()
+            @SuppressLint("UseKtx")
             override fun remove(): Boolean =
                 appPreferences.edit().remove(MANUAL_MEALS_KEY).commit()
         }, deviceClock)
@@ -1310,7 +1313,7 @@ class MainActivity : ComponentActivity() {
         val session = nutritionScanCoordinator.active() ?: return
         nutritionScanCoordinator.markNormalizing(session.scanId)?.also(::dispatchNutritionScanState)
         lifecycleScope.launch(kotlinx.coroutines.Dispatchers.IO) {
-            val bitmap = Bitmap.createBitmap(16, 12, Bitmap.Config.ARGB_8888).apply {
+            val bitmap = createBitmap(16, 12, Bitmap.Config.ARGB_8888).apply {
                 eraseColor(Color.rgb(222, 145, 55))
             }
             val stream = java.io.ByteArrayOutputStream()
@@ -1577,7 +1580,7 @@ class MainActivity : ComponentActivity() {
             invalidateActiveNutritionAnalysis("local_data_deleted")
             activeScanId?.let { nutritionScanCoordinator.cancel(it) }
             normalizedNutritionImages.clear()
-            appPreferences.edit().remove(PENDING_NUTRITION_SCAN_KEY).apply()
+            appPreferences.edit { remove(PENDING_NUTRITION_SCAN_KEY) }
             dispatchWebEvent("vitalis-nutrition-local-cleared", JSONObject().put("ok", true))
             readHealthData(selectedHealthDate)
         }
@@ -1607,7 +1610,7 @@ class MainActivity : ComponentActivity() {
             put("savedMealId", session.savedMealId ?: JSONObject.NULL)
             put("errorCode", session.errorCode ?: JSONObject.NULL)
         }
-        appPreferences.edit().putString(PENDING_NUTRITION_SCAN_KEY, payload.toString()).apply()
+        appPreferences.edit { putString(PENDING_NUTRITION_SCAN_KEY, payload.toString()) }
     }
 
     private fun restoreNutritionSession(expectedScanId: String): NutritionScanSession? {
