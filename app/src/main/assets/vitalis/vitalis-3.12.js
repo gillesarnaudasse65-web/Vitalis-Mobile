@@ -225,22 +225,35 @@
     function connector(key) {
       return source[key] && source[key].lastConnector ? source[key].lastConnector : "source non disponible";
     }
+    function metricValue(key, formatter) {
+      var metric = data.metrics && data.metrics[key];
+      if (!metric || metric.status === "DATA") return formatter(data[key]);
+      if (metric.status === "NO_DATA") return "aucune donnée";
+      if (metric.status === "NOT_AUTHORIZED") return "non autorisé";
+      if (metric.status === "UNSUPPORTED") return "non pris en charge";
+      return "erreur de lecture";
+    }
     var lines = [coach.name + " — analyse locale Vitalis."];
     if (coach.id === "nutrition") {
       lines.push("Repas : " + Number(n.mealCount || 0) + " • " + Math.round(Number(n.caloriesKcal || 0)) + " kcal.");
       lines.push("Glucides " + Math.round(Number(n.carbohydratesGrams || 0)) + " g • protéines " + Math.round(Number(n.proteinGrams || 0)) + " g • lipides " + Math.round(Number(n.fatGrams || 0)) + " g.");
     } else if (coach.id === "activity") {
-      lines.push(Math.round(Number(data.steps || 0)) + " pas • " + Math.round(Number(data.exerciseMinutes || 0)) + " minutes d’activité. Source : " + connector("exerciseMinutes") + ".");
+      lines.push("Pas : " + metricValue("steps", function(v){return Math.round(Number(v));}) +
+        " • activité : " + metricValue("exerciseMinutes", function(v){return Math.round(Number(v)) + " minutes";}) +
+        ". Source : " + connector("exerciseMinutes") + ".");
     } else if (coach.id === "sleep") {
-      lines.push("Sommeil : " + (Number(data.sleepMinutes || 0) / 60).toFixed(1) + " h. Source : " + connector("sleepMinutes") + ".");
+      lines.push("Sommeil : " + metricValue("sleepMinutes", function(v){return (Number(v) / 60).toFixed(1) + " h";}) +
+        ". Source : " + connector("sleepMinutes") + ".");
     } else if (coach.id === "recovery") {
-      lines.push("Fréquence cardiaque moyenne : " + (data.averageHeartRate == null ? "non disponible" : Math.round(data.averageHeartRate) + " bpm") + ".");
-      lines.push("Hydratation : " + Number(data.hydrationLitres || 0).toFixed(2) + " L.");
+      lines.push("Fréquence cardiaque moyenne : " + metricValue("averageHeartRate", function(v){return Math.round(Number(v)) + " bpm";}) + ".");
+      lines.push("Hydratation : " + metricValue("hydrationLitres", function(v){return Number(v).toFixed(2) + " L";}) + ".");
     } else if (coach.id === "mental") {
       lines.push("Aucune mesure mentale ne suffit à établir un diagnostic. Prenez deux minutes de respiration lente et notez votre niveau de tension.");
     } else {
       lines.push("Score Vitalis : " + Number(data.score || 0) + "/100.");
-      lines.push("Activité " + Math.round(Number(data.steps || 0)) + " pas • sommeil " + (Number(data.sleepMinutes || 0)/60).toFixed(1) + " h • hydratation " + Number(data.hydrationLitres || 0).toFixed(1) + " L.");
+      lines.push("Activité " + metricValue("steps", function(v){return Math.round(Number(v)) + " pas";}) +
+        " • sommeil " + metricValue("sleepMinutes", function(v){return (Number(v)/60).toFixed(1) + " h";}) +
+        " • hydratation " + metricValue("hydrationLitres", function(v){return Number(v).toFixed(1) + " L";}) + ".");
     }
     lines.push(data.syncedAt ? "Données du " + (data.selectedDate || "jour sélectionné") + "." : "Actualisez les données pour affiner le conseil.");
     lines.push("Conseil informatif, sans diagnostic médical.");

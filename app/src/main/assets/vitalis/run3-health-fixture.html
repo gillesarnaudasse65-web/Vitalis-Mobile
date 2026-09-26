@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Vitalis Run 3 Health Connect fixture</title>
+  <style>
+    body{font-family:sans-serif;background:#f8f6ef;color:#063c30;padding:24px}
+    main{max-width:520px;margin:auto;background:white;border-radius:18px;padding:20px}
+    label,button,strong{display:block;margin:12px 0}button,input{min-height:48px;padding:10px}
+  </style>
+</head>
+<body>
+<main>
+  <h1>Health Connect</h1>
+  <label>Date sélectionnée <input id="selectedDate" type="date"></label>
+  <strong id="selectedLabel" data-vitalis-date-label></strong>
+  <button id="refresh">Actualiser les données</button>
+  <button id="today" data-vitalis-today>Aujourd’hui</button>
+  <p id="stateCode">En attente</p>
+  <p id="missingPermissions"></p>
+</main>
+<script>
+  window.addEventListener("vitalis-health-data", function (event) {
+    var detail = event.detail || {};
+    var state = detail.healthConnectState || {};
+    document.querySelector("#stateCode").textContent = state.code || "UNKNOWN";
+    document.querySelector("#missingPermissions").textContent =
+      (state.missingPermissions || []).join(",");
+  });
+  window.addEventListener("load", function () {
+    window.__run3Ready = true;
+  });
+</script>
+</body>
+</html>
