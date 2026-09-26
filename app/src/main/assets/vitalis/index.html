@@ -34,7 +34,8 @@ nav{position:fixed;z-index:30;left:10px;right:10px;bottom:calc(8px + env(safe-ar
  <div id="classicFallbackBanner" class="banner">L’interface classique est temporairement indisponible. Vos fonctions essentielles restent actives hors ligne. <button id="retryClassic" style="display:block;margin-top:9px;border:0;border-radius:10px;padding:9px 12px;background:#063c30;color:#fff">Réessayer l’interface classique</button></div>
  <div id="offlineBanner" class="banner hidden">Mode hors ligne actif : vos données restent disponibles. Les fonctions en ligne reprendront avec Internet.</div>
  <section id="dashboard" class="page active">
-  <div class="section-title"><h2>Aujourd’hui</h2><span id="lastSync">Données locales</span></div>
+  <div class="section-title"><h2>Date sélectionnée</h2><span id="lastSync">Données locales</span></div>
+  <div style="display:flex;gap:9px;align-items:center;margin-bottom:12px"><label for="selectedHealthDate">Jour</label><input id="selectedHealthDate" type="date" aria-label="Date de santé sélectionnée"><button type="button" class="pill alt" data-vitalis-today>Aujourd’hui</button><span data-vitalis-date-label></span></div>
   <div class="grid">
    <article class="metric"><span class="icon">👟</span><strong id="steps">0</strong><small>pas / 8 000</small><div class="bar"><i id="stepsBar"></i></div></article>
    <article class="metric"><span class="icon">😴</span><strong id="sleep">—</strong><small>sommeil / 8 h</small><div class="bar"><i id="sleepBar"></i></div></article>
@@ -162,7 +163,7 @@ nav{position:fixed;z-index:30;left:10px;right:10px;bottom:calc(8px + env(safe-ar
  document.getElementById("closeModal").onclick=closeModal;document.getElementById("modal").onclick=function(e){if(e.target===this)closeModal();};
  document.getElementById("retryClassic").onclick=function(){if(native()&&native().openClassicInterface)native().openClassicInterface();else location.reload();};
  document.getElementById("authorizeHealth").onclick=function(){if(native()&&native().requestHealthConnectPermissions)native().requestHealthConnectPermissions();else alert("Health Connect est disponible dans l’application Android Vitalis.");};
- document.getElementById("refreshHealth").onclick=function(){if(native()&&native().refreshHealthData)native().refreshHealthData();else render();};
+ document.getElementById("refreshHealth").onclick=function(){if(window.VitalisDate)window.VitalisDate.refresh();else if(native()&&native().refreshHealthData)native().refreshHealthData();else render();};
  document.getElementById("coachRefresh").onclick=function(){render();document.getElementById("coachMessage").textContent=coach().message;};
  document.getElementById("chooseCoach").onclick=function(){if(window.VitalisCoaches&&window.VitalisCoaches.open)window.VitalisCoaches.open();};
  document.getElementById("saveProfile").onclick=function(){state.profile={name:document.getElementById("profileName").value||"Gilles",stepGoal:Number(document.getElementById("stepGoal").value)||8000,waterGoal:Number(document.getElementById("waterGoal").value)||2.5,sleepGoal:Number(document.getElementById("sleepGoal").value)||8};save();render();alert("Profil enregistré.");};

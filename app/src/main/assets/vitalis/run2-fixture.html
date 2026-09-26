@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<style>body{font:16px system-ui;margin:18px;color:#14342b}button,input{font:inherit;min-height:44px} .vitalis-native-overlay{position:fixed;inset:0;background:#0007;z-index:1000;display:flex;align-items:flex-end}.vitalis-native-sheet{background:white;width:100%;max-height:80vh;overflow:auto;padding:16px}.vitalis-native-head{display:flex;justify-content:space-between}</style>
+</head><body>
+<main><h1>Vitalis — test de parcours</h1>
+<button id="openCoaches">Choisir un coach</button>
+<label for="selectedDate">Date sélectionnée</label><input id="selectedDate" type="date">
+<span id="selectedLabel" data-vitalis-date-label></span>
+<button id="refresh">Actualiser les données</button>
+<button id="today" data-vitalis-today>Aujourd’hui</button>
+</main>
+<script>
+(function () {
+  window.__selectionChanges = 0;
+  new MutationObserver(function (changes) { window.__selectionChanges += changes.length; })
+    .observe(document.documentElement, {attributes:true,attributeFilter:['data-vitalis-selected-coach']});
+  var ready = setInterval(function () {
+    if (window.VitalisCoaches && window.VitalisDate) {
+      clearInterval(ready); window.__run2Ready = true;
+    }
+  }, 25);
+})();
+</script></body></html>
