@@ -13,6 +13,7 @@ android {
         targetSdk = 35
         versionCode = 19
         versionName = "3.14.0-coaches-connectors"
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
     buildTypes {
@@ -43,4 +44,8 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.7")
     implementation("androidx.health.connect:connect-client:1.1.0")
     implementation("androidx.webkit:webkit:1.13.0")
+    testImplementation("junit:junit:4.13.2")
+    androidTestImplementation("androidx.test:runner:1.6.2")
+    androidTestImplementation("androidx.test:core:1.6.1")
+    androidTestImplementation("androidx.test.ext:junit:1.2.1")
 }

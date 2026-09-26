@@ -32,6 +32,9 @@ import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import android.webkit.SslErrorHandler
+import android.net.http.SslError
+import android.graphics.Bitmap
 import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.ProgressBar
@@ -102,49 +105,9 @@ class MainActivity : ComponentActivity() {
     private var selectedHealthDate: LocalDate = LocalDate.now()
     private var pendingConnectorId: String? = null
     private var refreshAfterConnectorReturn = false
+    private var bridgeRegistered = false
 
-    private data class ConnectorDefinition(
-        val id: String,
-        val name: String,
-        val packages: List<String>,
-        val mode: String,
-        val note: String
-    )
-
-    private val connectorCatalog = listOf(
-        ConnectorDefinition("health_connect", "Health Connect", listOf("com.google.android.apps.healthdata"), "health_connect", "Autorisation Android native et centralisation des données."),
-        ConnectorDefinition("samsung_health", "Samsung Health", listOf("com.sec.android.app.shealth"), "health_connect", "Activez le partage Health Connect dans Samsung Health."),
-        ConnectorDefinition("google_fit", "Google Fit", listOf("com.google.android.apps.fitness"), "health_connect", "Utilisez Health Connect lorsque Google Fit le propose."),
-        ConnectorDefinition("mibro_fit", "Mibro Fit", listOf("com.xiaoxun.xunoversea", "com.zhencheng.mibrofit"), "bridge", "Le partage dépend de Mibro Fit, Google Fit ou Health Connect."),
-        ConnectorDefinition("fitbit", "Fitbit", listOf("com.fitbit.FitbitMobile"), "health_connect", "Activez Health Connect depuis les réglages Fitbit."),
-        ConnectorDefinition("garmin", "Garmin Connect", listOf("com.garmin.android.apps.connectmobile"), "provider", "Une autorisation Garmin officielle est requise si aucune donnée Health Connect n’est publiée."),
-        ConnectorDefinition("huawei", "Huawei Health", listOf("com.huawei.health"), "provider", "Une autorisation Huawei officielle est requise si aucune donnée Health Connect n’est publiée."),
-        ConnectorDefinition("strava", "Strava", listOf("com.strava"), "provider", "La connexion complète nécessite l’autorisation OAuth Strava."),
-        ConnectorDefinition("oura", "Oura", listOf("com.ouraring.oura"), "provider", "La connexion complète nécessite l’autorisation officielle Oura."),
-        ConnectorDefinition("whoop", "WHOOP", listOf("com.whoop.android"), "provider", "La connexion complète nécessite l’autorisation officielle WHOOP."),
-        ConnectorDefinition("withings", "Withings", listOf("com.withings.wiscale2"), "health_connect", "Activez Health Connect dans Withings lorsque disponible."),
-        ConnectorDefinition("health_sync", "Health Sync", listOf("nl.appyhapps.healthsync"), "bridge", "Passerelle autorisée vers Health Connect pour les fournisseurs compatibles."),
-        ConnectorDefinition("myfitnesspal", "MyFitnessPal", listOf("com.myfitnesspal.android"), "health_connect", "Activez Health Connect dans MyFitnessPal pour partager les données nutritionnelles disponibles."),
-        ConnectorDefinition("yazio", "YAZIO", listOf("com.yazio.android"), "provider", "L’accès nutritionnel dépend des autorisations du fournisseur."),
-        ConnectorDefinition("welmi", "Welmi", listOf("welmi.ai.android"), "provider", "Ouvrez Welmi pour gérer le compte et les options de partage proposées."),
-        ConnectorDefinition("cronometer", "Cronometer", listOf("com.cronometer.android.gold"), "provider", "L’accès nutritionnel dépend des autorisations du fournisseur."),
-        ConnectorDefinition("lifesum", "Lifesum", listOf("com.sillens.shapeupclub"), "provider", "L’accès nutritionnel dépend des autorisations du fournisseur."),
-        ConnectorDefinition("fiton", "FitOn", listOf("com.fiton.android"), "provider", "Ouvrez FitOn pour gérer le compte et les intégrations proposées."),
-        ConnectorDefinition("fitify", "Fitify", listOf("com.fitifyworkouts.bodyweight.workoutapp"), "provider", "Ouvrez Fitify pour gérer le compte et les intégrations proposées."),
-        ConnectorDefinition("flexme", "FlexMe", listOf("stretchingworkouts.homeexercises.flexibility"), "provider", "Ouvrez FlexMe pour gérer le compte et les options de partage proposées."),
-        ConnectorDefinition("trainingpeaks", "TrainingPeaks", listOf("com.peaksware.trainingpeaks"), "provider", "La connexion complète dépend de l’autorisation officielle TrainingPeaks."),
-        ConnectorDefinition("zwift", "Zwift", listOf("com.zwift.zwiftgame", "com.zwift.android.prod"), "provider", "La connexion complète dépend des intégrations officielles Zwift."),
-        ConnectorDefinition("peloton", "Peloton", listOf("com.onepeloton.callisto"), "provider", "Ouvrez Peloton pour gérer le compte et les intégrations proposées."),
-        ConnectorDefinition("freeletics", "Freeletics", listOf("com.freeletics.lite"), "provider", "Ouvrez Freeletics pour gérer le compte et les intégrations proposées."),
-        ConnectorDefinition("komoot", "Komoot", listOf("de.komoot.android"), "provider", "La connexion complète dépend de l’autorisation officielle Komoot."),
-        ConnectorDefinition("headspace", "Headspace", listOf("com.getsomeheadspace.android"), "provider", "Ouvrez Headspace pour gérer le compte et les options de partage proposées."),
-        ConnectorDefinition("calm", "Calm", listOf("com.calm.android"), "provider", "Ouvrez Calm pour gérer le compte et les options de partage proposées."),
-        ConnectorDefinition("sleep_cycle", "Sleep Cycle", listOf("com.northcube.sleepcycle"), "provider", "Ouvrez Sleep Cycle pour gérer le compte et les options de partage proposées."),
-        ConnectorDefinition("welltory", "Welltory", listOf("com.welltory.client.android"), "provider", "Ouvrez Welltory pour gérer le compte et les intégrations proposées."),
-        ConnectorDefinition("suunto", "Suunto", listOf("com.stt.android.suunto"), "provider", "Une autorisation Suunto officielle peut être nécessaire."),
-        ConnectorDefinition("coros", "COROS", listOf("com.yf.smart.coros.dist"), "provider", "Une autorisation COROS officielle peut être nécessaire."),
-        ConnectorDefinition("apple_health", "Apple Health", emptyList(), "unsupported_android", "Apple Health n’est pas accessible depuis Android. Utilisez un service intermédiaire officiellement compatible.")
-    )
+    private val connectorCatalog = ConnectorCatalog.entries
 
     private val healthPermissions = setOf(
         HealthPermission.getReadPermission(StepsRecord::class),
@@ -202,7 +165,7 @@ class MainActivity : ComponentActivity() {
         readHealthData()
         pendingConnectorId?.also { connectorId ->
             pendingConnectorId = null
-            connectorCatalog.firstOrNull { it.id == connectorId }?.let(::openInstalledConnector)
+            ConnectorCatalog.find(connectorId)?.let(::openInstalledConnector)
         }
     }
 
@@ -237,10 +200,19 @@ class MainActivity : ComponentActivity() {
             settings.mediaPlaybackRequiresUserGesture = false
             settings.mixedContentMode = android.webkit.WebSettings.MIXED_CONTENT_NEVER_ALLOW
             settings.cacheMode = android.webkit.WebSettings.LOAD_DEFAULT
+            settings.setSupportMultipleWindows(false)
+            settings.javaScriptCanOpenWindowsAutomatically = false
             settings.userAgentString = settings.userAgentString + " VitalisAndroid/3.14"
             WebView.setWebContentsDebuggingEnabled(BuildConfig.DEBUG)
-            addJavascriptInterface(VitalisAndroidBridge(), "VitalisAndroid")
+            // The bridge is exposed to every frame by Android, even when the top-level URL is
+            // trusted. NavigationPolicy guards top-level loads; full per-frame isolation remains
+            // a separate security task. Never register this object for an unrelated page.
+            registerTrustedBridge(this)
             webChromeClient = object : WebChromeClient() {
+                override fun onCreateWindow(
+                    view: WebView?, isDialog: Boolean, isUserGesture: Boolean,
+                    resultMsg: android.os.Message?
+                ): Boolean = false
                 override fun onShowFileChooser(
                     webView: WebView,
                     callback: ValueCallback<Array<Uri>>,
@@ -263,7 +235,8 @@ class MainActivity : ComponentActivity() {
                     request: WebResourceRequest
                 ): WebResourceResponse? {
                     val uri = request.url
-                    if (uri.host == VITALIS_HOST && uri.path?.startsWith(COACH_ASSET_PATH) == true) {
+                    if (NavigationPolicy.isTrusted(uri.toString()) && uri.host == VITALIS_HOST &&
+                        uri.path?.startsWith(COACH_ASSET_PATH) == true) {
                         val fileName = uri.lastPathSegment.orEmpty()
                         if (fileName in COACH_ASSET_FILES) {
                             return runCatching {
@@ -275,18 +248,42 @@ class MainActivity : ComponentActivity() {
                             }.getOrNull()
                         }
                     }
-                    return assetLoader.shouldInterceptRequest(uri)
+                    return if (NavigationPolicy.isTrusted(uri.toString()))
+                        assetLoader.shouldInterceptRequest(uri) else null
                 }
 
                 override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
-                    val uri = request.url
-                    return if (uri.host == LOCAL_ASSET_HOST || uri.host == VITALIS_HOST) false else {
-                        runCatching { startActivity(Intent(Intent.ACTION_VIEW, uri)) }
-                        true
+                    val decision = NavigationPolicy.decide(request.url.toString())
+                    if (!request.isForMainFrame) return decision != NavigationPolicy.Decision.TRUSTED
+                    return when (decision) {
+                        NavigationPolicy.Decision.TRUSTED -> false
+                        NavigationPolicy.Decision.EXTERNAL_HTTPS -> {
+                            // The external page never loads inside this privileged WebView.
+                            openSafeExternalUrl(request.url.toString())
+                            true
+                        }
+                        NavigationPolicy.Decision.REJECT -> true
                     }
                 }
 
+                override fun onPageStarted(view: WebView, url: String, favicon: Bitmap?) {
+                    if (!NavigationPolicy.isTrusted(url)) {
+                        unregisterTrustedBridge(view)
+                        view.stopLoading()
+                        loadOfflineFallback()
+                        return
+                    }
+                    registerTrustedBridge(view)
+                }
+
+                override fun onReceivedSslError(view: WebView, handler: SslErrorHandler, error: SslError) {
+                    handler.cancel()
+                    unregisterTrustedBridge(view)
+                    loadOfflineFallback()
+                }
+
                 override fun onPageFinished(view: WebView, url: String) {
+                    if (!NavigationPolicy.isTrusted(url)) return
                     loading.visibility = android.view.View.GONE
                     val host = requestHost(url)
                     if (host == VITALIS_HOST) {
@@ -303,6 +300,7 @@ class MainActivity : ComponentActivity() {
 
                 override fun onReceivedError(view: WebView, request: WebResourceRequest, error: WebResourceError) {
                     if (!request.isForMainFrame) return
+                    if (!NavigationPolicy.isTrusted(request.url.toString())) return
                     if (request.url.host == VITALIS_HOST) retryClassicInterfaceOrFallback()
                     else if (request.url.host == LOCAL_ASSET_HOST) showConnectionError()
                 }
@@ -312,17 +310,21 @@ class MainActivity : ComponentActivity() {
                     request: WebResourceRequest,
                     errorResponse: WebResourceResponse
                 ) {
-                    if (request.isForMainFrame && request.url.host == VITALIS_HOST && errorResponse.statusCode >= 400) {
+                    if (request.isForMainFrame && NavigationPolicy.isTrusted(request.url.toString()) &&
+                        request.url.host == VITALIS_HOST && errorResponse.statusCode >= 400) {
                         retryClassicInterfaceOrFallback()
                     }
                 }
             }
-            loadUrl(VITALIS_URL)
+            // Controlled offline start for the debug instrumentation smoke test only.
+            loadUrl(if (BuildConfig.DEBUG && intent.getBooleanExtra(EXTRA_FORCE_OFFLINE_FOR_TESTS, false))
+                LOCAL_URL else VITALIS_URL)
         }
         root.addView(webView, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
         setContentView(root)
 
-        scheduleClassicInterfaceTimeout()
+        if (!(BuildConfig.DEBUG && intent.getBooleanExtra(EXTRA_FORCE_OFFLINE_FOR_TESTS, false)))
+            scheduleClassicInterfaceTimeout()
 
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
@@ -332,6 +334,25 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun requestHost(url: String): String? = runCatching { Uri.parse(url).host }.getOrNull()
+
+    private fun registerTrustedBridge(view: WebView) {
+        if (!bridgeRegistered) {
+            view.addJavascriptInterface(VitalisAndroidBridge(), "VitalisAndroid")
+            bridgeRegistered = true
+        }
+    }
+
+    private fun unregisterTrustedBridge(view: WebView) {
+        if (bridgeRegistered) {
+            view.removeJavascriptInterface("VitalisAndroid")
+            bridgeRegistered = false
+        }
+    }
+
+    private fun openSafeExternalUrl(rawUrl: String) {
+        if (!BridgeInputPolicy.externalUrl(rawUrl)) return
+        runCatching { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(rawUrl))) }
+    }
 
     private fun injectClassicCompatibility(view: WebView) {
         val script = runCatching {
@@ -441,7 +462,7 @@ class MainActivity : ComponentActivity() {
 
         @JavascriptInterface
         fun refreshHealthDataForDate(dateIso: String) {
-            val requestedDate = runCatching { LocalDate.parse(dateIso.trim()) }.getOrNull()
+            val requestedDate = BridgeInputPolicy.date(dateIso)
             if (requestedDate == null) {
                 dispatchSyncState("error", "Date invalide : $dateIso")
                 return
@@ -466,7 +487,7 @@ class MainActivity : ComponentActivity() {
         @JavascriptInterface
         fun saveOpenAiKey(apiKey: String): Boolean {
             val cleanKey = apiKey.trim()
-            if (!cleanKey.startsWith("sk-") || cleanKey.length < 30) return false
+            if (!BridgeInputPolicy.apiKey(cleanKey)) return false
             return runCatching {
                 writeEncryptedSecret(OPENAI_SECRET_NAME, cleanKey)
                 true
@@ -487,7 +508,7 @@ class MainActivity : ComponentActivity() {
         @JavascriptInterface
         fun saveDeveloperAiKey(apiKey: String): Boolean {
             val cleanKey = apiKey.trim()
-            if (!cleanKey.startsWith("sk-") || cleanKey.length < 30) return false
+            if (!BridgeInputPolicy.apiKey(cleanKey)) return false
             return runCatching {
                 writeEncryptedSecret(OPENAI_DEVELOPER_SECRET_NAME, cleanKey)
                 true
@@ -531,6 +552,11 @@ class MainActivity : ComponentActivity() {
 
         @JavascriptInterface
         fun analyzeMealImage(imageDataUrl: String, requestId: String) {
+            if (!BridgeInputPolicy.requestId(requestId)) return
+            if (!BridgeInputPolicy.mealImage(imageDataUrl)) {
+                dispatchAiResponse(requestId, false, "", "Image non valide ou trop volumineuse.", "nutrition")
+                return
+            }
             requestCoach(
                 "Analyse cette photo de repas et réponds uniquement avec un objet JSON valide, sans balises Markdown, " +
                     "contenant exactement : name (texte), foods (tableau de textes), caloriesKcal, carbohydratesGrams, " +
@@ -621,7 +647,7 @@ class MainActivity : ComponentActivity() {
 
         @JavascriptInterface
         fun openExternalUrl(url: String) {
-            runOnUiThread { runCatching { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) } }
+            runOnUiThread { openSafeExternalUrl(url) }
         }
     }
 
@@ -767,6 +793,7 @@ class MainActivity : ComponentActivity() {
         requestId: String,
         imageDataUrl: String?
     ) {
+        if (!BridgeInputPolicy.requestId(requestId)) return
         val cleanPrompt = prompt.trim().take(MAX_AI_PROMPT_LENGTH)
         if (cleanPrompt.isEmpty()) {
             dispatchAiResponse(requestId, false, "", "Question vide.", coachId)
@@ -801,6 +828,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun requestDeveloper(prompt: String, requestId: String) {
+        if (!BridgeInputPolicy.requestId(requestId)) return
         val cleanPrompt = prompt.trim().take(MAX_DEVELOPER_PROMPT_LENGTH)
         if (cleanPrompt.isEmpty()) {
             dispatchAiResponse(requestId, false, "", "Demande vide.", "developer")
@@ -854,10 +882,10 @@ class MainActivity : ComponentActivity() {
                             "Demande de l’utilisateur : $prompt$context"
                         )
                     })
-                    if (!imageDataUrl.isNullOrBlank() && imageDataUrl.startsWith("data:image/")) {
+                    if (BridgeInputPolicy.mealImage(imageDataUrl)) {
                         put(JSONObject().apply {
                             put("type", "input_image")
-                            put("image_url", imageDataUrl.take(MAX_IMAGE_DATA_URL_LENGTH))
+                            put("image_url", imageDataUrl)
                             put("detail", "low")
                         })
                     }
@@ -1026,7 +1054,8 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun saveManualMealEstimate(rawJson: String): Boolean {
-        val parsed = runCatching { JSONObject(rawJson.take(MAX_MEAL_ESTIMATE_JSON_LENGTH)) }.getOrNull()
+        if (!BridgeInputPolicy.mealJsonSize(rawJson)) return false
+        val parsed = runCatching { JSONObject(rawJson) }.getOrNull()
             ?: return false
         val name = parsed.optString("name").trim().take(120).ifBlank { "Repas analysé" }
         val selectedDate = parsed.optString("selectedDate")
@@ -1083,8 +1112,12 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun handleConnectorAuthorization(connectorId: String) {
-        val definition = connectorCatalog.firstOrNull { it.id == connectorId }
-        if (definition == null || definition.id == "health_connect") {
+        val definition = ConnectorCatalog.find(connectorId)
+        if (definition == null) {
+            notifyWeb(false, "invalid_connector", "Connecteur inconnu.")
+            return
+        }
+        if (definition.id == "health_connect") {
             when (HealthConnectClient.getSdkStatus(this)) {
                 HealthConnectClient.SDK_AVAILABLE -> permissionLauncher.launch(healthPermissions)
                 HealthConnectClient.SDK_UNAVAILABLE_PROVIDER_UPDATE_REQUIRED -> openHealthConnectStore()
@@ -1765,6 +1798,7 @@ class MainActivity : ComponentActivity() {
     }
 
     companion object {
+        internal const val EXTRA_FORCE_OFFLINE_FOR_TESTS = "com.vitalis.healthos.FORCE_OFFLINE_TEST"
         private const val LOCAL_ASSET_HOST = "appassets.androidplatform.net"
         private const val LOCAL_URL = "https://$LOCAL_ASSET_HOST/assets/vitalis/index.html"
         private const val VITALIS_HOST = "vitalis-health-os.gillesarnaudasse65.chatgpt.site"
