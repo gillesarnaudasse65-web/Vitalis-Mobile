@@ -528,3 +528,7 @@ No product feature, UI redesign, version change, stored-data contract change, he
 - Open draft: https://github.com/gillesarnaudasse65-web/Vitalis-Mobile/pull/2
 
 External references explain platform behavior; every finding about Vitalis itself is grounded in the pinned source or specifically scoped execution above.
+
+## Dated appendix — 2026-09-26, Run 1 foundation
+
+The Run 0 audit remains a point-in-time record of the initial commit. Run 1 is tracked in [`VITALIS_RUN1_BUILD_TEST_FOUNDATION.md`](VITALIS_RUN1_BUILD_TEST_FOUNDATION.md). It adds the official pinned Gradle wrapper, CI quality gates and tests, plus minimum WebView navigation and bridge-input guardrails. The confirmed coach, date, Health Connect, scanner and voice defects remain open. The native bridge still lacks per-frame caller-origin isolation and the API key still enters through the remote DOM. Run 1 CI outcomes must be read from its new workflow run; the historical build success above does not validate these changes.
