@@ -8,6 +8,7 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
+import android.content.SharedPreferences
 import android.content.pm.PackageManager
 import android.graphics.Color
 import android.net.Uri
@@ -47,25 +48,20 @@ import androidx.health.connect.client.HealthConnectClient
 import androidx.health.connect.client.PermissionController
 import androidx.health.connect.client.permission.HealthPermission
 import androidx.health.connect.client.records.ActiveCaloriesBurnedRecord
-import androidx.health.connect.client.records.BloodPressureRecord
-import androidx.health.connect.client.records.BodyFatRecord
-import androidx.health.connect.client.records.BodyTemperatureRecord
 import androidx.health.connect.client.records.DistanceRecord
 import androidx.health.connect.client.records.ExerciseSessionRecord
 import androidx.health.connect.client.records.HeartRateRecord
-import androidx.health.connect.client.records.HeartRateVariabilityRmssdRecord
 import androidx.health.connect.client.records.HydrationRecord
 import androidx.health.connect.client.records.NutritionRecord
 import androidx.health.connect.client.records.OxygenSaturationRecord
-import androidx.health.connect.client.records.RespiratoryRateRecord
 import androidx.health.connect.client.records.SleepSessionRecord
 import androidx.health.connect.client.records.StepsRecord
-import androidx.health.connect.client.records.TotalCaloriesBurnedRecord
 import androidx.health.connect.client.records.WeightRecord
-import androidx.health.connect.client.request.ReadRecordsRequest
 import androidx.health.connect.client.time.TimeRangeFilter
 import androidx.lifecycle.lifecycleScope
 import androidx.webkit.WebViewAssetLoader
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import org.json.JSONArray
 import org.json.JSONObject
@@ -82,6 +78,7 @@ import java.time.Clock
 import androidx.core.content.edit
 import java.time.ZoneId
 import java.util.Locale
+import java.util.concurrent.atomic.AtomicLong
 import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
@@ -98,6 +95,9 @@ class MainActivity : ComponentActivity() {
     private var remotePageFinished = false
     private var remoteRetryCount = 0
     private var healthConnectClient: HealthConnectClient? = null
+    private var healthConnectDataSource: AndroidHealthConnectDataSource? = null
+    private var healthSyncJob: Job? = null
+    private val healthSyncGeneration = AtomicLong(0)
     private var lastSourcePackages: List<String> = emptyList()
     private var lastHealthPayload = JSONObject()
     private var textToSpeech: TextToSpeech? = null
@@ -112,24 +112,19 @@ class MainActivity : ComponentActivity() {
     private var pendingConnectorId: String? = null
     private var refreshAfterConnectorReturn = false
     private var bridgeRegistered = false
+    private lateinit var appPreferences: SharedPreferences
 
     private val connectorCatalog = ConnectorCatalog.entries
 
     private val healthPermissions = setOf(
         HealthPermission.getReadPermission(StepsRecord::class),
         HealthPermission.getReadPermission(DistanceRecord::class),
-        HealthPermission.getReadPermission(TotalCaloriesBurnedRecord::class),
         HealthPermission.getReadPermission(ActiveCaloriesBurnedRecord::class),
         HealthPermission.getReadPermission(ExerciseSessionRecord::class),
         HealthPermission.getReadPermission(SleepSessionRecord::class),
         HealthPermission.getReadPermission(HeartRateRecord::class),
-        HealthPermission.getReadPermission(HeartRateVariabilityRmssdRecord::class),
-        HealthPermission.getReadPermission(RespiratoryRateRecord::class),
         HealthPermission.getReadPermission(OxygenSaturationRecord::class),
-        HealthPermission.getReadPermission(BloodPressureRecord::class),
-        HealthPermission.getReadPermission(BodyTemperatureRecord::class),
         HealthPermission.getReadPermission(WeightRecord::class),
-        HealthPermission.getReadPermission(BodyFatRecord::class),
         HealthPermission.getReadPermission(NutritionRecord::class),
         HealthPermission.getReadPermission(HydrationRecord::class)
     )
@@ -161,6 +156,10 @@ class MainActivity : ComponentActivity() {
     private val permissionLauncher = registerForActivityResult(
         PermissionController.createRequestPermissionResultContract()
     ) { granted ->
+        appPreferences.edit {
+            putBoolean(HEALTH_PERMISSION_REQUESTED_KEY, true)
+            if (granted.isNotEmpty()) putBoolean(HEALTH_PERMISSION_EVER_AUTHORIZED_KEY, true)
+        }
         val allGranted = granted.containsAll(healthPermissions)
         notifyWeb(
             allGranted,
@@ -178,21 +177,22 @@ class MainActivity : ComponentActivity() {
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        val deviceClock = if (BuildConfig.DEBUG && intent.getBooleanExtra(EXTRA_RUN2_FIXTURE, false)) {
+        val deviceClock = if (BuildConfig.DEBUG && (
+                intent.getBooleanExtra(EXTRA_RUN2_FIXTURE, false) ||
+                    intent.getBooleanExtra(EXTRA_RUN3_FIXTURE, false)
+                )) {
             val fixed = BridgeInputPolicy.date(intent.getStringExtra(EXTRA_TEST_TODAY_ISO))
             fixed?.let { Clock.fixed(it.atStartOfDay(java.time.ZoneId.systemDefault()).toInstant(),
                 java.time.ZoneId.systemDefault()) } ?: Clock.systemDefaultZone()
         } else Clock.systemDefaultZone()
-        val preferences = getSharedPreferences(APP_PREFS, MODE_PRIVATE)
-        dateState = SelectedDateState(deviceClock, preferences.getString(SELECTED_HEALTH_DATE_KEY, null)) {
-            preferences.edit { putString(SELECTED_HEALTH_DATE_KEY, it) }
+        appPreferences = getSharedPreferences(APP_PREFS, MODE_PRIVATE)
+        dateState = SelectedDateState(deviceClock, appPreferences.getString(SELECTED_HEALTH_DATE_KEY, null)) {
+            appPreferences.edit { putString(SELECTED_HEALTH_DATE_KEY, it) }
         }
         window.statusBarColor = Color.parseColor("#063C30")
         window.navigationBarColor = Color.parseColor("#063C30")
 
-        if (HealthConnectClient.getSdkStatus(this) == HealthConnectClient.SDK_AVAILABLE) {
-            healthConnectClient = HealthConnectClient.getOrCreate(this)
-        }
+        ensureHealthConnectClient()
         initializeVoiceServices()
 
         root = LinearLayout(this).apply {
@@ -334,6 +334,8 @@ class MainActivity : ComponentActivity() {
             // Controlled offline start for the debug instrumentation smoke test only.
             loadUrl(when {
                 BuildConfig.DEBUG && intent.getBooleanExtra(EXTRA_RUN2_FIXTURE, false) -> LOCAL_TEST_URL
+                BuildConfig.DEBUG && intent.getBooleanExtra(EXTRA_RUN3_FIXTURE, false) ->
+                    LOCAL_RUN3_TEST_URL
                 BuildConfig.DEBUG && intent.getBooleanExtra(EXTRA_FORCE_OFFLINE_FOR_TESTS, false) -> LOCAL_URL
                 else -> VITALIS_URL
             })
@@ -342,7 +344,8 @@ class MainActivity : ComponentActivity() {
         setContentView(root)
 
         if (!(BuildConfig.DEBUG && (intent.getBooleanExtra(EXTRA_FORCE_OFFLINE_FOR_TESTS, false) ||
-                    intent.getBooleanExtra(EXTRA_RUN2_FIXTURE, false))))
+                    intent.getBooleanExtra(EXTRA_RUN2_FIXTURE, false) ||
+                    intent.getBooleanExtra(EXTRA_RUN3_FIXTURE, false))))
             scheduleClassicInterfaceTimeout()
 
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
@@ -391,6 +394,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
+        ensureHealthConnectClient()
         if (refreshAfterConnectorReturn && ::webView.isInitialized) {
             refreshAfterConnectorReturn = false
             Handler(Looper.getMainLooper()).postDelayed(
@@ -1220,13 +1224,104 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun dispatchManualOnlyHealthData(selectedDate: LocalDate, syncStatus: String) {
+    private fun healthConnectAvailability(): HealthConnectAvailability =
+        when (HealthConnectClient.getSdkStatus(this)) {
+            HealthConnectClient.SDK_AVAILABLE -> HealthConnectAvailability.AVAILABLE
+            HealthConnectClient.SDK_UNAVAILABLE_PROVIDER_UPDATE_REQUIRED ->
+                if (isPackageInstalled(HEALTH_CONNECT_PACKAGE)) {
+                    HealthConnectAvailability.PROVIDER_UPDATE_REQUIRED
+                } else {
+                    HealthConnectAvailability.PROVIDER_NOT_INSTALLED
+                }
+            else -> HealthConnectAvailability.NOT_SUPPORTED
+        }
+
+    private fun ensureHealthConnectClient() {
+        if (
+            healthConnectClient == null &&
+            HealthConnectClient.getSdkStatus(this) == HealthConnectClient.SDK_AVAILABLE
+        ) {
+            val client = HealthConnectClient.getOrCreate(this)
+            healthConnectClient = client
+            healthConnectDataSource = AndroidHealthConnectDataSource(client)
+        }
+    }
+
+    private fun healthPermissionState(granted: Set<String>): HealthConnectStateModel =
+        HealthConnectStateResolver.permissionState(
+            availability = healthConnectAvailability(),
+            requiredPermissions = healthPermissions,
+            grantedPermissions = granted,
+            permissionRequested = appPreferences.getBoolean(
+                HEALTH_PERMISSION_REQUESTED_KEY,
+                false
+            ),
+            previouslyAuthorized = appPreferences.getBoolean(
+                HEALTH_PERMISSION_EVER_AUTHORIZED_KEY,
+                false
+            )
+        )
+
+    private fun healthStateJson(state: HealthConnectStateModel) = JSONObject().apply {
+        put("code", state.code.name)
+        put("label", state.label)
+        put("reason", state.reason ?: JSONObject.NULL)
+        put("retryAction", state.retryAction ?: JSONObject.NULL)
+        put("missingPermissions", JSONArray(state.missingPermissions))
+    }
+
+    private fun healthMetricJson(result: HealthMetricResult) = JSONObject().apply {
+        put("status", result.status.name)
+        put("value", result.value ?: JSONObject.NULL)
+        put("unit", result.unit)
+        put("sampleCount", result.sampleCount)
+        put("sourceCount", result.sourceCount)
+        put("errorCode", result.errorCode ?: JSONObject.NULL)
+    }
+
+    private fun unavailableMetric(unit: String, state: HealthConnectStateModel): HealthMetricResult =
+        when (state.code) {
+            HealthConnectStateCode.PERMISSION_NOT_REQUESTED,
+            HealthConnectStateCode.PERMISSION_DENIED,
+            HealthConnectStateCode.PARTIAL_PERMISSION ->
+                HealthMetricResult.notAuthorized(unit)
+            HealthConnectStateCode.SYNC_ERROR -> HealthMetricResult.error(
+                unit,
+                state.reason ?: "sync_error"
+            )
+            else -> HealthMetricResult.unsupported(unit)
+        }
+
+    private fun healthMetric(
+        authorized: Boolean,
+        recordCount: Int,
+        sourcePackages: List<String>,
+        unit: String,
+        value: Number?,
+        sampleCount: Int = recordCount
+    ): HealthMetricResult = when {
+        !authorized -> HealthMetricResult.notAuthorized(unit)
+        recordCount == 0 || value == null -> HealthMetricResult.noData(unit)
+        else -> HealthMetricResult.data(
+            value,
+            unit,
+            sampleCount,
+            sourcePackages.filter { it.isNotBlank() }.distinct().size
+        )
+    }
+
+    internal fun isCurrentHealthSync(generation: Long): Boolean =
+        generation == healthSyncGeneration.get()
+
+    private fun dispatchManualOnlyHealthData(
+        selectedDate: LocalDate,
+        state: HealthConnectStateModel
+    ) {
         val now = Instant.now()
         val zone = ZoneId.systemDefault()
-        val today = LocalDate.now(zone)
-        val rangeStart = selectedDate.atStartOfDay(zone).toInstant()
-        val nextDayStart = selectedDate.plusDays(1).atStartOfDay(zone).toInstant()
-        val rangeEnd = if (selectedDate == today && now.isBefore(nextDayStart)) now else nextDayStart
+        val interval = HealthDayIntervals.forDate(selectedDate, zone)
+        val rangeStart = interval.start
+        val rangeEnd = interval.endExclusive
         val manualMeals = manualMealsForDate(selectedDate)
         val scannerPackage = applicationContext.packageName
         val nutritionSummary = buildNutritionSummary(emptyList(), manualMeals)
@@ -1268,19 +1363,49 @@ class MainActivity : ComponentActivity() {
             put("nutrition", attribution(manualTimes.map { scannerPackage to it }))
         }
         val payload = JSONObject().apply {
-            put("periodHours", 24)
+            put("periodHours", Duration.between(rangeStart, rangeEnd).toHours())
             put("selectedDate", selectedDate.toString())
             put("rangeStart", rangeStart.toString())
             put("rangeEnd", rangeEnd.toString())
-            put("steps", 0)
-            put("sleepMinutes", 0)
-            put("exerciseMinutes", 0)
+            put("steps", JSONObject.NULL)
+            put("sleepMinutes", JSONObject.NULL)
+            put("exerciseMinutes", JSONObject.NULL)
             put("averageHeartRate", JSONObject.NULL)
-            put("hydrationLitres", 0.0)
-            put("distanceKm", 0.0)
-            put("activeCalories", 0.0)
+            put("hydrationLitres", JSONObject.NULL)
+            put("distanceKm", JSONObject.NULL)
+            put("activeCalories", JSONObject.NULL)
             put("oxygenPercent", JSONObject.NULL)
             put("weightKg", JSONObject.NULL)
+            put("healthConnectState", healthStateJson(state))
+            put("metrics", JSONObject().apply {
+                put("steps", healthMetricJson(unavailableMetric("count", state)))
+                put("sleepMinutes", healthMetricJson(unavailableMetric("min", state)))
+                put("exerciseMinutes", healthMetricJson(unavailableMetric("min", state)))
+                put("averageHeartRate", healthMetricJson(unavailableMetric("bpm", state)))
+                put("hydrationLitres", healthMetricJson(unavailableMetric("L", state)))
+                put("distanceKm", healthMetricJson(unavailableMetric("km", state)))
+                put("activeCalories", healthMetricJson(unavailableMetric("kcal", state)))
+                put("oxygenPercent", healthMetricJson(unavailableMetric("%", state)))
+                put("weightKg", healthMetricJson(unavailableMetric("kg", state)))
+                put(
+                    "nutrition",
+                    healthMetricJson(
+                        if (manualMeals.isEmpty()) unavailableMetric("meal", state)
+                        else HealthMetricResult.data(
+                            manualMeals.size,
+                            "meal",
+                            manualMeals.size,
+                            1
+                        )
+                    )
+                )
+                put("totalCalories", healthMetricJson(HealthMetricResult.unsupported("kcal")))
+                put("heartRateVariability", healthMetricJson(HealthMetricResult.unsupported("ms")))
+                put("respiratoryRate", healthMetricJson(HealthMetricResult.unsupported("breaths/min")))
+                put("bloodPressure", healthMetricJson(HealthMetricResult.unsupported("mmHg")))
+                put("bodyTemperature", healthMetricJson(HealthMetricResult.unsupported("°C")))
+                put("bodyFat", healthMetricJson(HealthMetricResult.unsupported("%")))
+            })
             put("nutrition", nutritionSummary)
             put("details", details)
             put("score", scoreBreakdown.getInt("overall"))
@@ -1294,11 +1419,14 @@ class MainActivity : ComponentActivity() {
         lastHealthPayload = payload
         dispatchConnectorStatus(sources)
         dispatchHealthData(payload)
-        dispatchSyncState(syncStatus)
+        dispatchSyncState(state.code.name.lowercase(Locale.US), state.reason)
     }
 
     private fun readHealthData(selectedDate: LocalDate = selectedHealthDate) {
         selectedHealthDate = selectedDate
+        val generation = healthSyncGeneration.incrementAndGet()
+        healthSyncJob?.cancel()
+        ensureHealthConnectClient()
         if (BuildConfig.DEBUG && intent.getBooleanExtra(EXTRA_RUN2_FIXTURE, false)) {
             debugRefreshRequests.add(selectedDate.toString())
             val payload = JSONObject().put("selectedDate", selectedDate.toString())
@@ -1307,48 +1435,107 @@ class MainActivity : ComponentActivity() {
             dispatchSyncState("complete")
             return
         }
+        if (BuildConfig.DEBUG && intent.getBooleanExtra(EXTRA_RUN3_FIXTURE, false)) {
+            debugRefreshRequests.add(selectedDate.toString())
+            val state = HealthConnectStateModel(
+                HealthConnectStateCode.PARTIAL_PERMISSION,
+                "Autorisation Health Connect partielle",
+                retryAction = "request_permissions",
+                missingPermissions = listOf("android.permission.health.READ_SLEEP")
+            )
+            val payload = JSONObject().apply {
+                put("selectedDate", selectedDate.toString())
+                put("rangeStart", HealthDayIntervals.forDate(
+                    selectedDate,
+                    ZoneId.systemDefault()
+                ).start.toString())
+                put("rangeEnd", HealthDayIntervals.forDate(
+                    selectedDate,
+                    ZoneId.systemDefault()
+                ).endExclusive.toString())
+                put("healthConnectState", healthStateJson(state))
+                put("metrics", JSONObject().apply {
+                    put("steps", healthMetricJson(HealthMetricResult.noData("count")))
+                    put("sleepMinutes", healthMetricJson(
+                        HealthMetricResult.notAuthorized("min")
+                    ))
+                })
+            }
+            lastHealthPayload = payload
+            dispatchHealthData(payload)
+            dispatchSyncState(state.code.name.lowercase(Locale.US))
+            return
+        }
         val client = healthConnectClient
-        if (client == null) {
-            dispatchManualOnlyHealthData(selectedDate, "unavailable")
+        val dataSource = healthConnectDataSource
+        if (client == null || dataSource == null) {
+            dispatchManualOnlyHealthData(
+                selectedDate,
+                healthPermissionState(emptySet())
+            )
             return
         }
         dispatchSyncState("refreshing")
-        lifecycleScope.launch {
-            val granted = client.permissionController.getGrantedPermissions()
+        healthSyncJob = lifecycleScope.launch {
+            val granted = try {
+                client.permissionController.getGrantedPermissions()
+            } catch (error: SecurityException) {
+                if (isCurrentHealthSync(generation)) {
+                    appPreferences.edit {
+                        putBoolean(HEALTH_PERMISSION_REQUESTED_KEY, true)
+                        putBoolean(HEALTH_PERMISSION_EVER_AUTHORIZED_KEY, true)
+                    }
+                    dispatchManualOnlyHealthData(
+                        selectedDate,
+                        HealthConnectStateModel(
+                            HealthConnectStateCode.PERMISSION_DENIED,
+                            "Autorisation Health Connect révoquée",
+                            reason = "permission_revoked",
+                            retryAction = "request_permissions",
+                            missingPermissions = healthPermissions.sorted()
+                        )
+                    )
+                }
+                return@launch
+            }
+            val permissionState = healthPermissionState(granted)
             val hasAnyHealthPermission = granted.intersect(healthPermissions).isNotEmpty()
             if (!hasAnyHealthPermission) {
                 dispatchConnectorStatus(emptyList())
+                if (isCurrentHealthSync(generation)) {
+                    dispatchManualOnlyHealthData(selectedDate, permissionState)
+                }
+                return@launch
             }
-            runCatching {
+            try {
                 val now = Instant.now()
                 val zone = ZoneId.systemDefault()
-                val today = LocalDate.now(zone)
-                val rangeStart = selectedDate.atStartOfDay(zone).toInstant()
-                val nextDayStart = selectedDate.plusDays(1).atStartOfDay(zone).toInstant()
-                val rangeEnd = if (selectedDate == today && now.isBefore(nextDayStart)) now else nextDayStart
+                val interval = HealthDayIntervals.forDate(selectedDate, zone)
+                val rangeStart = interval.start
+                val rangeEnd = interval.endExclusive
                 val filter = TimeRangeFilter.between(now.minus(Duration.ofDays(30)), now)
-                val steps = if (HealthPermission.getReadPermission(StepsRecord::class) in granted) client.readRecords(ReadRecordsRequest(StepsRecord::class, filter)).records else emptyList()
-                val sleep = if (HealthPermission.getReadPermission(SleepSessionRecord::class) in granted) client.readRecords(ReadRecordsRequest(SleepSessionRecord::class, filter)).records else emptyList()
-                val exercise = if (HealthPermission.getReadPermission(ExerciseSessionRecord::class) in granted) client.readRecords(ReadRecordsRequest(ExerciseSessionRecord::class, filter)).records else emptyList()
-                val heart = if (HealthPermission.getReadPermission(HeartRateRecord::class) in granted) client.readRecords(ReadRecordsRequest(HeartRateRecord::class, filter)).records else emptyList()
-                val hydration = if (HealthPermission.getReadPermission(HydrationRecord::class) in granted) client.readRecords(ReadRecordsRequest(HydrationRecord::class, filter)).records else emptyList()
-                val distance = if (HealthPermission.getReadPermission(DistanceRecord::class) in granted) client.readRecords(ReadRecordsRequest(DistanceRecord::class, filter)).records else emptyList()
-                val activeCalories = if (HealthPermission.getReadPermission(ActiveCaloriesBurnedRecord::class) in granted) client.readRecords(ReadRecordsRequest(ActiveCaloriesBurnedRecord::class, filter)).records else emptyList()
-                val oxygen = if (HealthPermission.getReadPermission(OxygenSaturationRecord::class) in granted) client.readRecords(ReadRecordsRequest(OxygenSaturationRecord::class, filter)).records else emptyList()
-                val weight = if (HealthPermission.getReadPermission(WeightRecord::class) in granted) client.readRecords(ReadRecordsRequest(WeightRecord::class, filter)).records else emptyList()
-                val nutrition = if (HealthPermission.getReadPermission(NutritionRecord::class) in granted) client.readRecords(ReadRecordsRequest(NutritionRecord::class, filter)).records else emptyList()
+                val steps = if (HealthPermission.getReadPermission(StepsRecord::class) in granted) dataSource.readAll(StepsRecord::class, filter) else emptyList()
+                val sleep = if (HealthPermission.getReadPermission(SleepSessionRecord::class) in granted) dataSource.readAll(SleepSessionRecord::class, filter) else emptyList()
+                val exercise = if (HealthPermission.getReadPermission(ExerciseSessionRecord::class) in granted) dataSource.readAll(ExerciseSessionRecord::class, filter) else emptyList()
+                val heart = if (HealthPermission.getReadPermission(HeartRateRecord::class) in granted) dataSource.readAll(HeartRateRecord::class, filter) else emptyList()
+                val hydration = if (HealthPermission.getReadPermission(HydrationRecord::class) in granted) dataSource.readAll(HydrationRecord::class, filter) else emptyList()
+                val distance = if (HealthPermission.getReadPermission(DistanceRecord::class) in granted) dataSource.readAll(DistanceRecord::class, filter) else emptyList()
+                val activeCalories = if (HealthPermission.getReadPermission(ActiveCaloriesBurnedRecord::class) in granted) dataSource.readAll(ActiveCaloriesBurnedRecord::class, filter) else emptyList()
+                val oxygen = if (HealthPermission.getReadPermission(OxygenSaturationRecord::class) in granted) dataSource.readAll(OxygenSaturationRecord::class, filter) else emptyList()
+                val weight = if (HealthPermission.getReadPermission(WeightRecord::class) in granted) dataSource.readAll(WeightRecord::class, filter) else emptyList()
+                val nutrition = if (HealthPermission.getReadPermission(NutritionRecord::class) in granted) dataSource.readAll(NutritionRecord::class, filter) else emptyList()
                 val recentSources = (steps.map { it.metadata.dataOrigin.packageName } + sleep.map { it.metadata.dataOrigin.packageName } + exercise.map { it.metadata.dataOrigin.packageName } + heart.map { it.metadata.dataOrigin.packageName } + hydration.map { it.metadata.dataOrigin.packageName } + distance.map { it.metadata.dataOrigin.packageName } + activeCalories.map { it.metadata.dataOrigin.packageName } + oxygen.map { it.metadata.dataOrigin.packageName } + weight.map { it.metadata.dataOrigin.packageName } + nutrition.map { it.metadata.dataOrigin.packageName }).filter { it.isNotBlank() }.distinct()
                 val selectedDay = TimeRangeFilter.between(rangeStart, rangeEnd)
-                val stepsDay = if (HealthPermission.getReadPermission(StepsRecord::class) in granted) client.readRecords(ReadRecordsRequest(StepsRecord::class, selectedDay)).records else emptyList()
-                val sleepDay = if (HealthPermission.getReadPermission(SleepSessionRecord::class) in granted) client.readRecords(ReadRecordsRequest(SleepSessionRecord::class, selectedDay)).records else emptyList()
-                val exerciseDay = if (HealthPermission.getReadPermission(ExerciseSessionRecord::class) in granted) client.readRecords(ReadRecordsRequest(ExerciseSessionRecord::class, selectedDay)).records else emptyList()
-                val heartDay = if (HealthPermission.getReadPermission(HeartRateRecord::class) in granted) client.readRecords(ReadRecordsRequest(HeartRateRecord::class, selectedDay)).records else emptyList()
-                val hydrationDay = if (HealthPermission.getReadPermission(HydrationRecord::class) in granted) client.readRecords(ReadRecordsRequest(HydrationRecord::class, selectedDay)).records else emptyList()
-                val distanceDay = if (HealthPermission.getReadPermission(DistanceRecord::class) in granted) client.readRecords(ReadRecordsRequest(DistanceRecord::class, selectedDay)).records else emptyList()
-                val activeCaloriesDay = if (HealthPermission.getReadPermission(ActiveCaloriesBurnedRecord::class) in granted) client.readRecords(ReadRecordsRequest(ActiveCaloriesBurnedRecord::class, selectedDay)).records else emptyList()
-                val oxygenDay = if (HealthPermission.getReadPermission(OxygenSaturationRecord::class) in granted) client.readRecords(ReadRecordsRequest(OxygenSaturationRecord::class, selectedDay)).records else emptyList()
-                val weightDay = if (HealthPermission.getReadPermission(WeightRecord::class) in granted) client.readRecords(ReadRecordsRequest(WeightRecord::class, selectedDay)).records else emptyList()
-                val nutritionDay = if (HealthPermission.getReadPermission(NutritionRecord::class) in granted) client.readRecords(ReadRecordsRequest(NutritionRecord::class, selectedDay)).records else emptyList()
+                val stepsDay = if (HealthPermission.getReadPermission(StepsRecord::class) in granted) dataSource.readAll(StepsRecord::class, selectedDay) else emptyList()
+                val sleepDay = if (HealthPermission.getReadPermission(SleepSessionRecord::class) in granted) dataSource.readAll(SleepSessionRecord::class, selectedDay) else emptyList()
+                val exerciseDay = if (HealthPermission.getReadPermission(ExerciseSessionRecord::class) in granted) dataSource.readAll(ExerciseSessionRecord::class, selectedDay) else emptyList()
+                val heartDay = if (HealthPermission.getReadPermission(HeartRateRecord::class) in granted) dataSource.readAll(HeartRateRecord::class, selectedDay) else emptyList()
+                val hydrationDay = if (HealthPermission.getReadPermission(HydrationRecord::class) in granted) dataSource.readAll(HydrationRecord::class, selectedDay) else emptyList()
+                val distanceDay = if (HealthPermission.getReadPermission(DistanceRecord::class) in granted) dataSource.readAll(DistanceRecord::class, selectedDay) else emptyList()
+                val activeCaloriesDay = if (HealthPermission.getReadPermission(ActiveCaloriesBurnedRecord::class) in granted) dataSource.readAll(ActiveCaloriesBurnedRecord::class, selectedDay) else emptyList()
+                val oxygenDay = if (HealthPermission.getReadPermission(OxygenSaturationRecord::class) in granted) dataSource.readAll(OxygenSaturationRecord::class, selectedDay) else emptyList()
+                val weightDay = if (HealthPermission.getReadPermission(WeightRecord::class) in granted) dataSource.readAll(WeightRecord::class, selectedDay) else emptyList()
+                val nutritionDay = if (HealthPermission.getReadPermission(NutritionRecord::class) in granted) dataSource.readAll(NutritionRecord::class, selectedDay) else emptyList()
                 val manualMeals = manualMealsForDate(selectedDate)
                 val scannerPackage = applicationContext.packageName
                 val manualMealTimes = manualMeals.mapNotNull {
@@ -1410,20 +1597,147 @@ class MainActivity : ComponentActivity() {
                     averageHeartRate,
                     nutritionSummary
                 )
+                val healthRecordCount = stepsDay.size + sleepDay.size + exerciseDay.size +
+                    heartDay.size + hydrationDay.size + distanceDay.size +
+                    activeCaloriesDay.size + oxygenDay.size + weightDay.size +
+                    nutritionDay.size
+                val finalState = if (
+                    permissionState.code == HealthConnectStateCode.AUTHORIZED_NO_DATA &&
+                    healthRecordCount > 0
+                ) {
+                    permissionState.copy(
+                        code = HealthConnectStateCode.AUTHORIZED_WITH_DATA,
+                        label = "Health Connect autorisé avec données"
+                    )
+                } else {
+                    permissionState
+                }
+                val metrics = JSONObject().apply {
+                    put("steps", healthMetricJson(healthMetric(
+                        HealthPermission.getReadPermission(StepsRecord::class) in granted,
+                        stepsDay.size,
+                        stepsDay.map { it.metadata.dataOrigin.packageName },
+                        "count",
+                        stepsDay.takeIf { it.isNotEmpty() }?.sumOf { it.count }
+                    )))
+                    put("sleepMinutes", healthMetricJson(healthMetric(
+                        HealthPermission.getReadPermission(SleepSessionRecord::class) in granted,
+                        sleepDay.size,
+                        sleepDay.map { it.metadata.dataOrigin.packageName },
+                        "min",
+                        sleepDay.takeIf { it.isNotEmpty() }
+                            ?.sumOf { Duration.between(it.startTime, it.endTime).toMinutes() }
+                    )))
+                    put("exerciseMinutes", healthMetricJson(healthMetric(
+                        HealthPermission.getReadPermission(ExerciseSessionRecord::class) in granted,
+                        exerciseDay.size,
+                        exerciseDay.map { it.metadata.dataOrigin.packageName },
+                        "min",
+                        exerciseDay.takeIf { it.isNotEmpty() }
+                            ?.sumOf { Duration.between(it.startTime, it.endTime).toMinutes() }
+                    )))
+                    put("averageHeartRate", healthMetricJson(healthMetric(
+                        HealthPermission.getReadPermission(HeartRateRecord::class) in granted,
+                        samples.size,
+                        heartDay.map { it.metadata.dataOrigin.packageName },
+                        "bpm",
+                        averageHeartRate,
+                        samples.size
+                    )))
+                    put("hydrationLitres", healthMetricJson(healthMetric(
+                        HealthPermission.getReadPermission(HydrationRecord::class) in granted,
+                        hydrationDay.size,
+                        hydrationDay.map { it.metadata.dataOrigin.packageName },
+                        "L",
+                        hydrationDay.takeIf { it.isNotEmpty() }?.sumOf { it.volume.inLiters }
+                    )))
+                    put("distanceKm", healthMetricJson(healthMetric(
+                        HealthPermission.getReadPermission(DistanceRecord::class) in granted,
+                        distanceDay.size,
+                        distanceDay.map { it.metadata.dataOrigin.packageName },
+                        "km",
+                        distanceDay.takeIf { it.isNotEmpty() }?.sumOf { it.distance.inKilometers }
+                    )))
+                    put("activeCalories", healthMetricJson(healthMetric(
+                        HealthPermission.getReadPermission(ActiveCaloriesBurnedRecord::class) in granted,
+                        activeCaloriesDay.size,
+                        activeCaloriesDay.map { it.metadata.dataOrigin.packageName },
+                        "kcal",
+                        activeCaloriesDay.takeIf { it.isNotEmpty() }
+                            ?.sumOf { it.energy.inKilocalories }
+                    )))
+                    put("oxygenPercent", healthMetricJson(healthMetric(
+                        HealthPermission.getReadPermission(OxygenSaturationRecord::class) in granted,
+                        oxygenDay.size,
+                        oxygenDay.map { it.metadata.dataOrigin.packageName },
+                        "%",
+                        oxygenDay.maxByOrNull { it.time }?.percentage?.value
+                    )))
+                    put("weightKg", healthMetricJson(healthMetric(
+                        HealthPermission.getReadPermission(WeightRecord::class) in granted,
+                        weightDay.size,
+                        weightDay.map { it.metadata.dataOrigin.packageName },
+                        "kg",
+                        weightDay.maxByOrNull { it.time }?.weight?.inKilograms
+                    )))
+                    val nutritionCount = nutritionDay.size + manualMeals.size
+                    put(
+                        "nutrition",
+                        healthMetricJson(
+                            if (nutritionCount == 0) {
+                                healthMetric(
+                                    HealthPermission.getReadPermission(NutritionRecord::class) in granted,
+                                    0,
+                                    emptyList(),
+                                    "meal",
+                                    null
+                                )
+                            } else {
+                                HealthMetricResult.data(
+                                    nutritionCount,
+                                    "meal",
+                                    nutritionCount,
+                                    (
+                                        nutritionDay.map { it.metadata.dataOrigin.packageName } +
+                                            manualMeals.map { scannerPackage }
+                                    ).distinct().size
+                                )
+                            }
+                        )
+                    )
+                    put("totalCalories", healthMetricJson(HealthMetricResult.unsupported("kcal")))
+                    put("heartRateVariability", healthMetricJson(HealthMetricResult.unsupported("ms")))
+                    put("respiratoryRate", healthMetricJson(
+                        HealthMetricResult.unsupported("breaths/min")
+                    ))
+                    put("bloodPressure", healthMetricJson(HealthMetricResult.unsupported("mmHg")))
+                    put("bodyTemperature", healthMetricJson(HealthMetricResult.unsupported("°C")))
+                    put("bodyFat", healthMetricJson(HealthMetricResult.unsupported("%")))
+                }
                 val payload = JSONObject().apply {
-                    put("periodHours", 24)
+                    put("periodHours", Duration.between(rangeStart, rangeEnd).toHours())
                     put("selectedDate", selectedDate.toString())
                     put("rangeStart", rangeStart.toString())
                     put("rangeEnd", rangeEnd.toString())
-                    put("steps", stepsDay.sumOf { it.count })
-                    put("sleepMinutes", sleepDay.sumOf { Duration.between(it.startTime, it.endTime).toMinutes() })
-                    put("exerciseMinutes", exerciseDay.sumOf { Duration.between(it.startTime, it.endTime).toMinutes() })
+                    put("steps", stepsDay.takeIf { it.isNotEmpty() }
+                        ?.sumOf { it.count } ?: JSONObject.NULL)
+                    put("sleepMinutes", sleepDay.takeIf { it.isNotEmpty() }
+                        ?.sumOf { Duration.between(it.startTime, it.endTime).toMinutes() }
+                        ?: JSONObject.NULL)
+                    put("exerciseMinutes", exerciseDay.takeIf { it.isNotEmpty() }
+                        ?.sumOf { Duration.between(it.startTime, it.endTime).toMinutes() }
+                        ?: JSONObject.NULL)
                     put("averageHeartRate", averageHeartRate ?: JSONObject.NULL)
-                    put("hydrationLitres", hydrationDay.sumOf { it.volume.inLiters })
-                    put("distanceKm", distanceDay.sumOf { it.distance.inKilometers })
-                    put("activeCalories", activeCaloriesDay.sumOf { it.energy.inKilocalories })
+                    put("hydrationLitres", hydrationDay.takeIf { it.isNotEmpty() }
+                        ?.sumOf { it.volume.inLiters } ?: JSONObject.NULL)
+                    put("distanceKm", distanceDay.takeIf { it.isNotEmpty() }
+                        ?.sumOf { it.distance.inKilometers } ?: JSONObject.NULL)
+                    put("activeCalories", activeCaloriesDay.takeIf { it.isNotEmpty() }
+                        ?.sumOf { it.energy.inKilocalories } ?: JSONObject.NULL)
                     put("oxygenPercent", oxygenDay.maxByOrNull { it.time }?.percentage?.value ?: JSONObject.NULL)
                     put("weightKg", weightDay.maxByOrNull { it.time }?.weight?.inKilograms ?: JSONObject.NULL)
+                    put("healthConnectState", healthStateJson(finalState))
+                    put("metrics", metrics)
                     put("nutrition", nutritionSummary)
                     put("details", details)
                     put("score", scoreBreakdown.getInt("overall"))
@@ -1433,14 +1747,41 @@ class MainActivity : ComponentActivity() {
                     put("connectorCount", sources.size)
                     put("syncedAt", now.toString())
                 }
+                if (!isCurrentHealthSync(generation)) return@launch
                 lastSourcePackages = sources
                 lastHealthPayload = payload
                 dispatchConnectorStatus(sources)
                 dispatchHealthData(payload)
-                dispatchSyncState(if (hasAnyHealthPermission) "complete" else "permission_required")
-            }.onFailure { error ->
-                dispatchSyncState("error", error.message)
-                notifyWeb(false, "sync_error", error.message ?: "Synchronisation impossible")
+                dispatchSyncState(finalState.code.name.lowercase(Locale.US))
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: SecurityException) {
+                if (isCurrentHealthSync(generation)) {
+                    appPreferences.edit {
+                        putBoolean(HEALTH_PERMISSION_REQUESTED_KEY, true)
+                        putBoolean(HEALTH_PERMISSION_EVER_AUTHORIZED_KEY, true)
+                    }
+                    val revoked = HealthConnectStateModel(
+                        HealthConnectStateCode.PERMISSION_DENIED,
+                        "Autorisation Health Connect révoquée",
+                        reason = "permission_revoked",
+                        retryAction = "request_permissions",
+                        missingPermissions = healthPermissions.sorted()
+                    )
+                    dispatchManualOnlyHealthData(selectedDate, revoked)
+                    notifyWeb(false, "permission_revoked", revoked.label)
+                }
+            } catch (error: Exception) {
+                if (isCurrentHealthSync(generation)) {
+                    val failure = HealthConnectStateModel(
+                        HealthConnectStateCode.SYNC_ERROR,
+                        "Erreur de synchronisation Health Connect",
+                        reason = error.javaClass.simpleName,
+                        retryAction = "retry_sync"
+                    )
+                    dispatchManualOnlyHealthData(selectedDate, failure)
+                    notifyWeb(false, "sync_error", error.message ?: "Synchronisation impossible")
+                }
             }
         }
     }
@@ -1840,11 +2181,19 @@ class MainActivity : ComponentActivity() {
     companion object {
         internal const val EXTRA_FORCE_OFFLINE_FOR_TESTS = "com.vitalis.healthos.FORCE_OFFLINE_TEST"
         internal const val EXTRA_RUN2_FIXTURE = "com.vitalis.healthos.RUN2_FIXTURE"
+        internal const val EXTRA_RUN3_FIXTURE = "com.vitalis.healthos.RUN3_FIXTURE"
         internal const val EXTRA_TEST_TODAY_ISO = "com.vitalis.healthos.TEST_TODAY_ISO"
         private const val SELECTED_HEALTH_DATE_KEY = "selected_health_date_iso"
+        private const val HEALTH_PERMISSION_REQUESTED_KEY =
+            "health_connect_permission_requested_v1"
+        private const val HEALTH_PERMISSION_EVER_AUTHORIZED_KEY =
+            "health_connect_ever_authorized_v1"
+        private const val HEALTH_CONNECT_PACKAGE = "com.google.android.apps.healthdata"
         private const val LOCAL_ASSET_HOST = "appassets.androidplatform.net"
         private const val LOCAL_URL = "https://$LOCAL_ASSET_HOST/assets/vitalis/index.html"
         private const val LOCAL_TEST_URL = "https://$LOCAL_ASSET_HOST/assets/vitalis/run2-fixture.html"
+        private const val LOCAL_RUN3_TEST_URL =
+            "https://$LOCAL_ASSET_HOST/assets/vitalis/run3-health-fixture.html"
         private const val VITALIS_HOST = "vitalis-health-os.gillesarnaudasse65.chatgpt.site"
         private const val VITALIS_URL = "https://$VITALIS_HOST/"
         private const val COACH_ASSET_PATH = "/__vitalis/coaches/"
