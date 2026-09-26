@@ -734,6 +734,7 @@
     var iso = selectedDateIso();
     if (!iso || iso === lastRequestedDate) return;
     lastRequestedDate = iso;
+    if (window.VitalisDate && window.VitalisDate.get() === iso) return;
     if (window.VitalisDate) window.VitalisDate.select(iso);
     else if (bridge && bridge.refreshHealthDataForDate) bridge.refreshHealthDataForDate(iso);
   }

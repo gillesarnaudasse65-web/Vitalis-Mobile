@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.Intent
 import android.os.SystemClock
 import android.view.MotionEvent
+import android.view.KeyEvent
 import android.view.View
 import android.view.ViewGroup
 import android.webkit.WebView
@@ -33,6 +34,7 @@ class Run2WebViewTest {
         }
         ActivityScenario.launch<MainActivity>(intent).use { scenario ->
             ready(scenario)
+            assertEquals("\"2026-09-26\"", eval(scenario, "window.VitalisDate.get()"))
             val coaches = listOf("general", "nutrition", "activity", "sleep", "recovery", "mental")
             for (id in coaches) {
                 for (part in listOf("card", "portrait", "name")) {
@@ -40,6 +42,8 @@ class Run2WebViewTest {
                     await(scenario) { eval(scenario, "document.querySelectorAll('[data-coach-312]').length") == "6" }
                     assertEquals("All six coach buttons must be present", "6",
                         eval(scenario, "document.querySelectorAll('[data-coach-312]').length"))
+                    assertEquals("1", eval(scenario,
+                        "document.querySelectorAll('[data-coach-312].selected[aria-pressed=true]').length"))
                     val selector = "[data-coach-312='$id']"
                     assertEquals("true", eval(scenario,
                         "(function(){var e=document.querySelector(${JSONObject.quote(selector)});" +
@@ -62,6 +66,41 @@ class Run2WebViewTest {
                 }
             }
 
+            // The production catalogue uses delegation, so replacement nodes retain one handler.
+            tap(scenario, "#openCoaches")
+            eval(scenario, "(function(){var g=document.querySelector('.vitalis-coach-grid-312');" +
+                "g.innerHTML=g.innerHTML;window.__selectionChanges=0;return true})()")
+            tap(scenario, "[data-coach-312='sleep'] strong")
+            await(scenario) { eval(scenario, "window.__selectionChanges") == "1" }
+            tap(scenario, ".vitalis-coach-overlay-312 .vitalis-native-close")
+
+            // A nested control may handle its own action without selecting the parent coach.
+            tap(scenario, "#openCoaches")
+            eval(scenario, "(function(){var c=document.querySelector('[data-coach-312=\"recovery\"]');" +
+                "var n=document.createElement('span');n.setAttribute('role','button');" +
+                "n.setAttribute('data-coach-action','');n.textContent='Action interne';" +
+                "n.style.cssText='display:block;padding:12px;background:#eee';" +
+                "n.onclick=function(){window.__nestedActions=(window.__nestedActions||0)+1};" +
+                "c.appendChild(n);window.__selectionChanges=0;return true})()")
+            tap(scenario, "[data-coach-action]")
+            assertEquals("1", eval(scenario, "window.__nestedActions"))
+            assertEquals("0", eval(scenario, "window.__selectionChanges"))
+            assertEquals("1", eval(scenario, "document.querySelectorAll('.vitalis-power-overlay-312').length"))
+            tap(scenario, ".vitalis-power-overlay-312 .vitalis-native-close")
+
+            // Native keyboard activation of the same semantic button.
+            for (keyCode in listOf(KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_SPACE)) {
+                tap(scenario, "#openCoaches")
+                eval(scenario, "document.querySelector('[data-coach-312=\"mental\"]').focus();" +
+                    "window.__selectionChanges=0;true")
+                instrument.sendKeyDownUpSync(keyCode)
+                await(scenario) { eval(scenario,
+                    "document.documentElement.getAttribute('data-vitalis-selected-coach')") == "\"mental\"" &&
+                    eval(scenario, "document.querySelectorAll('.vitalis-coach-overlay-312').length") == "1" }
+                assertEquals("1", eval(scenario, "window.__selectionChanges"))
+                tap(scenario, ".vitalis-coach-overlay-312 .vitalis-native-close")
+            }
+
             // Real touch on refresh; the date input emits the same production change event as a picker.
             eval(scenario, "(function(){var e=document.querySelector('#selectedDate');" +
                 "e.value='2026-09-18';e.dispatchEvent(new Event('change',{bubbles:true}));return true})()")
@@ -78,6 +117,11 @@ class Run2WebViewTest {
             assertEquals("\"2026-09-18\"", eval(scenario, "window.VitalisDate.get()"))
             scenario.moveToState(androidx.lifecycle.Lifecycle.State.STARTED)
             scenario.moveToState(androidx.lifecycle.Lifecycle.State.RESUMED)
+            assertEquals("\"2026-09-18\"", eval(scenario, "window.VitalisDate.get()"))
+            scenario.onActivity { activity ->
+                findWebView(activity.findViewById(android.R.id.content))?.reload()
+            }
+            ready(scenario)
             assertEquals("\"2026-09-18\"", eval(scenario, "window.VitalisDate.get()"))
             scenario.recreate()
             ready(scenario)

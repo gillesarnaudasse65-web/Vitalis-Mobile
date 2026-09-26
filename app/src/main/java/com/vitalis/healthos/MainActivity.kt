@@ -79,6 +79,7 @@ import java.time.Duration
 import java.time.Instant
 import java.time.LocalDate
 import java.time.Clock
+import androidx.core.content.edit
 import java.time.ZoneId
 import java.util.Locale
 import javax.crypto.Cipher
@@ -184,7 +185,7 @@ class MainActivity : ComponentActivity() {
         } else Clock.systemDefaultZone()
         val preferences = getSharedPreferences(APP_PREFS, MODE_PRIVATE)
         dateState = SelectedDateState(deviceClock, preferences.getString(SELECTED_HEALTH_DATE_KEY, null)) {
-            preferences.edit().putString(SELECTED_HEALTH_DATE_KEY, it).apply()
+            preferences.edit { putString(SELECTED_HEALTH_DATE_KEY, it) }
         }
         window.statusBarColor = Color.parseColor("#063C30")
         window.navigationBarColor = Color.parseColor("#063C30")
