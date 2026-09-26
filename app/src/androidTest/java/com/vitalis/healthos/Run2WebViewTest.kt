@@ -35,6 +35,12 @@ class Run2WebViewTest {
         ActivityScenario.launch<MainActivity>(intent).use { scenario ->
             ready(scenario)
             assertEquals("\"2026-09-26\"", eval(scenario, "window.VitalisDate.get()"))
+            // Reinject both actual production layers into this document; their guards must no-op.
+            eval(scenario, "(function(){['compat.js','vitalis-3.12.js'].forEach(function(src){" +
+                "var s=document.createElement('script');s.src=src;s.onload=function(){" +
+                "window.__run2ScriptLoads=(window.__run2ScriptLoads||0)+1};" +
+                "document.head.appendChild(s)});return true})()")
+            await(scenario) { eval(scenario, "window.__run2ScriptLoads") == "2" }
             val coaches = listOf("general", "nutrition", "activity", "sleep", "recovery", "mental")
             for (id in coaches) {
                 for (part in listOf("card", "portrait", "name")) {
@@ -111,6 +117,11 @@ class Run2WebViewTest {
             tap(scenario, "#refresh")
             await(scenario) { recorded(scenario).isNotEmpty() }
             assertEquals(listOf("2026-09-18"), recorded(scenario))
+            scenario.onActivity { it.clearDebugRecordedDates() }
+            tap(scenario, "#refresh")
+            tap(scenario, "#refresh")
+            await(scenario) { recorded(scenario).size == 2 }
+            assertEquals(listOf("2026-09-18", "2026-09-18"), recorded(scenario))
 
             tap(scenario, "#openCoaches")
             tap(scenario, "[data-coach-312='sleep']")
