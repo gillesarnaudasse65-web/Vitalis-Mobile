@@ -33,7 +33,7 @@ jobs:
       - name: Verify Gradle tasks and plugin initialization
         run: ./gradlew --no-daemon tasks
       - name: JavaScript source contract tests
-        run: node --test scripts/test-source-contracts.cjs
+        run: node --test --test-reporter=spec --test-reporter-destination=stdout --test-reporter=junit --test-reporter-destination=run2-js.xml scripts/test-*.cjs
       - name: Clean
         run: ./gradlew --no-daemon clean
       - name: Android unit tests
@@ -51,6 +51,7 @@ jobs:
             app/build/reports/tests/
             app/build/test-results/
             app/build/reports/lint-results-debug.*
+            run2-js.xml
           if-no-files-found: warn
           retention-days: 90
       - name: Upload APKs
