@@ -199,7 +199,8 @@
     if (/autoriser.*health connect|connecter.*health connect|health connect.*autoriser/.test(label)) return healthConnect;
     if (/actualiser.*donnee|synchroniser.*donnee|refresh.*data/.test(label)) {
       return function () {
-        if (nativeBridge && nativeBridge.refreshHealthData) nativeBridge.refreshHealthData();
+        if (window.VitalisDate) window.VitalisDate.refresh();
+        else if (nativeBridge && nativeBridge.refreshHealthData) nativeBridge.refreshHealthData();
       };
     }
     if (/gerer.*source|voir.*source|source.*donnee/.test(label)) {
@@ -265,6 +266,8 @@
       ? event.target.closest("button,a,[role='button']")
       : null;
     if (!target) return;
+    // The generic legacy label router must never consume a coach-card tap.
+    if (target.closest('.vitalis-native-overlay')) return;
     var action = actionFor(normalize(
       (target.innerText || "") + " " +
       (target.textContent || "") + " " +
@@ -284,7 +287,8 @@
     addMeasure: addMeasure,
     requestHealthConnectPermissions: healthConnect,
     refreshHealthData: function () {
-      if (nativeBridge && nativeBridge.refreshHealthData) nativeBridge.refreshHealthData();
+      if (window.VitalisDate) window.VitalisDate.refresh();
+      else if (nativeBridge && nativeBridge.refreshHealthData) nativeBridge.refreshHealthData();
     },
     openOfflineMode: function () {
       if (nativeBridge && nativeBridge.openOfflineMode) nativeBridge.openOfflineMode();
@@ -475,7 +479,7 @@
   });
 
   window.VitalisConnectorControls = {
-    refresh: function () { if (bridge && bridge.refreshHealthData) bridge.refreshHealthData(); },
+    refresh: function () { if (window.VitalisDate) window.VitalisDate.refresh(); },
     showSources: showSourceReport,
     microphoneOn: function () { if (bridge && bridge.setMicrophoneEnabled) bridge.setMicrophoneEnabled(true); },
     microphoneOff: function () { if (bridge && bridge.setMicrophoneEnabled) bridge.setMicrophoneEnabled(false); },
@@ -555,7 +559,8 @@
     if (healthData && healthData.syncedAt) { nextPanel(); return; }
     pendingPanel = nextPanel;
     panel("Synchronisation", '<div class="vitalis-deep-empty">Récupération des données Health Connect…</div>');
-    if (bridge && bridge.refreshHealthData) bridge.refreshHealthData();
+    if (window.VitalisDate) window.VitalisDate.refresh();
+    else if (bridge && bridge.refreshHealthData) bridge.refreshHealthData();
   }
 
   function showScore() {
@@ -658,7 +663,7 @@
   document.addEventListener("click", function (event) {
     var target = event.target;
     if (!target || !target.closest) return;
-    if (target.closest(".vitalis-deep-overlay")) return;
+    if (target.closest(".vitalis-deep-overlay,.vitalis-native-overlay")) return;
     var direct = norm(target.innerText || target.textContent || target.getAttribute && target.getAttribute("aria-label"));
     if (direct === "+" || /ajouter|enregistrer|scanner/.test(direct)) return;
     var context = contextText(target);
@@ -689,7 +694,7 @@
   window.VitalisDeepDetails = {
     explainScore: showScore,
     open: showCategory,
-    refresh: function () { if (bridge && bridge.refreshHealthData) bridge.refreshHealthData(); }
+    refresh: function () { if (window.VitalisDate) window.VitalisDate.refresh(); }
   };
 })();
 
@@ -727,10 +732,10 @@
 
   function requestSelectedDate(force) {
     var iso = selectedDateIso();
-    if (!iso || !bridge || !bridge.refreshHealthDataForDate) return;
-    if (!force && iso === lastRequestedDate) return;
+    if (!iso || iso === lastRequestedDate) return;
     lastRequestedDate = iso;
-    bridge.refreshHealthDataForDate(iso);
+    if (window.VitalisDate) window.VitalisDate.select(iso);
+    else if (bridge && bridge.refreshHealthDataForDate) bridge.refreshHealthDataForDate(iso);
   }
 
   function formatSleep(minutes) {
@@ -824,7 +829,9 @@
     new MutationObserver(scheduleEnhancement).observe(document.body, {childList:true,subtree:true});
   }
   setTimeout(function () {
-    requestSelectedDate(false);
+    // A newly loaded remote page can initially show Today while native storage
+    // contains an earlier chosen day. Baseline its label without replacing state.
+    lastRequestedDate = selectedDateIso();
     enhanceClassicInterface();
   }, 650);
 })();
@@ -1202,6 +1209,7 @@
   }
 
   function selectedDay() {
+    if (window.VitalisDate) return window.VitalisDate.get();
     var data = document.body && document.body.getAttribute("data-vitalis-selected-date");
     var selected = document.querySelector(
       "[data-selected-date],[aria-selected='true'][data-date],input[type='date']"
@@ -1255,9 +1263,8 @@
     }
     try {
       var day = selectedDay();
-      window.dispatchEvent(new CustomEvent("vitalis-selected-date-change", { detail: { date: day, force: true } }));
-      document.dispatchEvent(new CustomEvent("vitalis-selected-date-change", { detail: { date: day, force: true } }));
-      if (bridge && bridge.refreshHealthDataForDate) bridge.refreshHealthDataForDate(day);
+      if (window.VitalisDate) window.VitalisDate.refresh();
+      else if (bridge && bridge.refreshHealthDataForDate) bridge.refreshHealthDataForDate(day);
       else if (bridge && bridge.refreshHealthData) bridge.refreshHealthData();
       else if (window.VitalisNativeActions && window.VitalisNativeActions.refreshHealthData) {
         window.VitalisNativeActions.refreshHealthData();

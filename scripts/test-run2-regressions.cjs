@@ -27,7 +27,7 @@ function runCaptureClick(label, inCoachOverlay) {
     innerText: label, textContent: label,
     getAttribute: () => '',
     closest: selector => selector === 'button,a,[role=\'button\']' ||
-      (inCoachOverlay && selector === '.vitalis-power-overlay-312') ? target : null
+      (inCoachOverlay && selector === '.vitalis-native-overlay') ? target : null
   };
   context.listener({target, preventDefault: () => events.push('prevent'),
     stopImmediatePropagation: () => events.push('stop')});

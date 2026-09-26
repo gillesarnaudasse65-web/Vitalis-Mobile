@@ -75,6 +75,7 @@
   }
 
   function selectedDate() {
+    if (window.VitalisDate) return window.VitalisDate.get();
     var nativeData = readJsonBridge("getLastHealthData", {});
     if (nativeData.selectedDate) return nativeData.selectedDate;
     var input = document.querySelector("input[type='date']");
@@ -392,8 +393,10 @@
   function showCoachCatalog() {
     var selected = coachById(selectedCoachId);
     var cards = coaches.map(function (coach) {
-      return '<button class="vitalis-coach-card-312 ' + (coach.id === selected.id ? "selected" : "") +
-        '" data-coach-312="' + coach.id + '"><img class="vitalis-portrait-312" src="' + imageUrl(coach) +
+      return '<button type="button" class="vitalis-coach-card-312 ' + (coach.id === selected.id ? "selected" : "") +
+        '" data-coach-312="' + coach.id + '" aria-label="' + esc(coach.name) + ' — ' + esc(coach.role) +
+        '" aria-pressed="' + (coach.id === selected.id ? 'true' : 'false') +
+        '"><img class="vitalis-portrait-312" src="' + imageUrl(coach) +
         '" alt="' + esc(coach.name) + '"><strong>' + esc(coach.name) + '</strong><small>' +
         esc(coach.role) + '</small>' + (coach.id === selected.id ? '<span class="vitalis-selected-badge-312">Actif</span>' : "") +
         "</button>";
@@ -408,6 +411,7 @@
     root.addEventListener("click", function (event) {
       var card = event.target.closest && event.target.closest("[data-coach-312]");
       if (card) {
+        if (event.target.closest('[data-coach-action]')) return;
         root.remove();
         openCoach(card.getAttribute("data-coach-312"));
         return;
@@ -625,8 +629,8 @@
     ask:function (coach) { openCoach(coach && coach.id || selectedCoachId, coach && coach.prompt); },
     select:function (id) { setSelectedCoach(id); openCoach(id); },
     refresh:function () {
-      var day = selectedDate();
-      if (bridge && bridge.refreshHealthDataForDate) bridge.refreshHealthDataForDate(day);
+      if (window.VitalisDate) window.VitalisDate.refresh();
+      else if (bridge && bridge.refreshHealthDataForDate) bridge.refreshHealthDataForDate(selectedDate());
       else if (bridge && bridge.refreshHealthData) bridge.refreshHealthData();
     }
   };
@@ -634,8 +638,8 @@
   window.VitalisConnectorControls = Object.assign({}, window.VitalisConnectorControls || {}, {
     showSources:showConnectors,
     refresh:function () {
-      var day = selectedDate();
-      if (bridge && bridge.refreshHealthDataForDate) bridge.refreshHealthDataForDate(day);
+      if (window.VitalisDate) window.VitalisDate.refresh();
+      else if (bridge && bridge.refreshHealthDataForDate) bridge.refreshHealthDataForDate(selectedDate());
       else if (bridge && bridge.refreshHealthData) bridge.refreshHealthData();
     }
   });
