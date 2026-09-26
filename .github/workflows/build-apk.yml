@@ -30,6 +30,8 @@ jobs:
         uses: gradle/actions/setup-gradle@v4
       - name: Show build environment
         run: ./gradlew --version
+      - name: Verify Gradle tasks and plugin initialization
+        run: ./gradlew --no-daemon tasks
       - name: JavaScript source contract tests
         run: node --test scripts/test-source-contracts.cjs
       - name: Clean

@@ -20,7 +20,9 @@ JDK 17, Gradle 8.11.1, Android Gradle Plugin 8.9.1, Kotlin 2.0.21, compileSdk 36
 
 `.github/workflows/build-apk.yml` triggers for PRs targeting main, pushes to main and manual dispatch with `contents: read`. It validates the wrapper, uses Temurin JDK 17, Android SDK setup and Gradle caching, then runs `./gradlew --version`, Node tests, clean, `testDebugUnitTest`, `lintDebug`, `assembleDebug` and `assembleDebugAndroidTest`. A dependent job runs `connectedDebugAndroidTest` on a Google APIs API 35 emulator with KVM. Any mandatory gate failure fails CI; report upload runs even on failure. Unit/lint and instrumentation reports and both debug APKs use 90-day retention. No release APK, AAB or production signing is created.
 
-Run 1 workflow reference and exact gate outcomes: **PENDING** until a new run executes against this branch. Debug APK path when successful: `app/build/outputs/apk/debug/app-debug.apk`; actual size and artifact URL must be read from that run, not inferred.
+Run 1 PR workflow [run 54](https://github.com/gillesarnaudasse65-web/Vitalis-Mobile/actions/runs/36246262348) on commit `6eb8e0af204c88fe46c69b24b3a93504bb20cf89`: **PASS**, both jobs. Wrapper validation, JDK/SDK setup, Gradle `--version`, Node tests, clean, JVM tests, lint, debug and instrumentation APK assembly all passed. The report XML records 10 JVM tests (5 input, 3 navigation, 2 catalogue), 0 failures or skips. Lint reports 0 errors and 33 warnings. The API 35 Google APIs emulator ran one offline MainActivity smoke test, 0 failures/skips. The report and APK uploads succeeded.
+
+The [debug APK artifact](https://github.com/gillesarnaudasse65-web/Vitalis-Mobile/actions/runs/36246262348/artifacts/10907711941) contains `debug/app-debug.apk` (11,334,453 bytes) and the instrumentation APK (811,727 bytes). [Unit/lint reports](https://github.com/gillesarnaudasse65-web/Vitalis-Mobile/actions/runs/36246262348/artifacts/10907672145) and [instrumentation reports](https://github.com/gillesarnaudasse65-web/Vitalis-Mobile/actions/runs/36246262348/artifacts/10907144694) are available. All three artifacts expire 2026-12-25 under the 90-day setting. A documentation/CI inventory follow-up commit adds `./gradlew tasks`; its own PR run must also pass before merge.
 
 ## WebView and native boundary
 
@@ -32,7 +34,7 @@ Top-level trust is limited to exact `https://vitalis-health-os.gillesarnaudasse6
 
 Source inspection found no API key, Authorization header, full health record, meal image or voice transcript logging introduced here. Fake test key strings only; no production credentials, tokens, keystores or personal health data. CI commands do not print secrets. The remote DOM key-entry exposure remains open.
 
-Run 0 evidence remains authoritative. **STILL OPEN:** Nia and Sékou card-click interception, selected-day reset, Health Connect pagination and deduplication, scanner duplicate save and capture validation, voice lifecycle, provider OAuth, full deletion/export and production signing. These paths were **NOT RETESTED** by this run. Run 2 should characterize and repair coach clicks and date behavior on a real rendered WebView. Readiness for Run 2 depends on the new CI gates and APK passing; no release readiness is implied.
+Run 0 evidence remains authoritative. **STILL OPEN:** Nia and Sékou card-click interception, selected-day reset, Health Connect pagination and deduplication, scanner duplicate save and capture validation, voice lifecycle, provider OAuth, full deletion/export and production signing. These paths were **NOT RETESTED** by this run. Run 2 should characterize and repair coach clicks and date behavior on a real rendered WebView. The first full CI run supports **READY FOR RUN 2: YES** after the follow-up run passes; no release readiness is implied.
 
 ## Files and integrity
 
