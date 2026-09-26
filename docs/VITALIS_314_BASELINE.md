@@ -1,5 +1,7 @@
 # Vitalis — verified baseline audit (Run 0)
 
+> **Run 3 status addendum (2026-09-26):** Run 1 PR #6 and Run 2 PR #7 were subsequently merged into `main`; Run 3 starts from combined merge commit `2187e053ea30d78e893abbd7f72de74697e6e3cc`. The Health Connect findings in this baseline describe the original Run 0 implementation. Run 3 adds complete pagination, stable-ID deduplication, explicit availability/permission/metric states, local-day DST handling and stale-response protection; it also removes the six unused read permissions. See `docs/VITALIS_RUN3_HEALTH_CONNECT.md` for the current contract, evidence and remaining limitations.
+
 **Actual version: `3.14.0-coaches-connectors`, versionCode `19`.** The requested baseline was `3.14.0`; the suffix is a verified difference, not an audit change.
 
 ## 1. Executive summary
