@@ -1,7 +1,5 @@
 # Vitalis — verified baseline audit (Run 0)
 
-> **Run 3 status addendum (2026-09-26):** Run 1 PR #6 and Run 2 PR #7 were subsequently merged into `main`; Run 3 starts from combined merge commit `2187e053ea30d78e893abbd7f72de74697e6e3cc`. The Health Connect findings in this baseline describe the original Run 0 implementation. Run 3 adds complete pagination, stable-ID deduplication, explicit availability/permission/metric states, local-day DST handling and stale-response protection; it also removes the six unused read permissions. See `docs/VITALIS_RUN3_HEALTH_CONNECT.md` for the current contract, evidence and remaining limitations.
-
 **Actual version: `3.14.0-coaches-connectors`, versionCode `19`.** The requested baseline was `3.14.0`; the suffix is a verified difference, not an audit change.
 
 ## 1. Executive summary
@@ -538,3 +536,7 @@ The Run 0 audit remains a point-in-time record of the initial commit. Run 1 is t
 ## Dated appendix — 2026-09-26, Run 2 coach and date corrections
 
 Run 2 is documented in [`VITALIS_RUN2_COACH_DATE_WEBVIEW.md`](VITALIS_RUN2_COACH_DATE_WEBVIEW.md). It reproduces the old coach capture and today-refresh defects before fixing them, then tests the same injected scripts with an approved local WebView fixture. The original Run 0 findings remain historical evidence; Health Connect, scanner, voice, OAuth, deletion/export and security residuals remain open. Run 2 PR #7 is stacked on Run 1 PR #6 while #6 remains unmerged.
+
+## Dated appendix — 2026-09-26, Run 3 Health Connect reliability
+
+Run 1 PR #6 and Run 2 PR #7 were subsequently merged into `main`; Run 3 starts from combined merge commit `2187e053ea30d78e893abbd7f72de74697e6e3cc`. The Health Connect findings above remain the historical Run 0 baseline rather than being rewritten. Run 3 adds complete pagination, stable-ID deduplication, explicit availability/permission/metric states, local-day DST handling and stale-response protection; it also removes the six unused read permissions. See [`VITALIS_RUN3_HEALTH_CONNECT.md`](VITALIS_RUN3_HEALTH_CONNECT.md) for the current contract, CI evidence and remaining limitations.

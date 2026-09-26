@@ -131,6 +131,10 @@ Local Node suites and JavaScript syntax checks pass. Local Gradle execution is *
 - The remote site's independent DOM remains outside this repository. The tests validate the bundled fixture with the actual injected compatibility scripts.
 - Run 1's unresolved bridge/subframe trust boundary, scanner, voice, export/deletion, release signing and publication limitations are unchanged.
 
+## Prerequisites for Run 4
+
+Run 4 may begin after PR #8 remains green against `main`, receives review and is merged normally. Its planned nutrition-scanner stabilization must retain the Run 3 structured metric contract, selected-date source of truth, generation guard, ten-permission surface and all Run 1–3 regression tests. Physical-device Health Connect validation remains required before a production release, but it does not block the independent scanner-focused Run 4 branch when the limitation stays explicit.
+
 ## Rollback
 
 Run 3 is isolated after base `2187e053ea30d78e893abbd7f72de74697e6e3cc`. Before merge, close PR #8 and delete only `agent/vitalis-run3-health-connect-reliability`. After merge, revert the Run 3 merge commit as one unit; do not reset or rewrite `main`, because the Run 1 and Run 2 merge commits are shared history. Removing only the Kotlin helper files without reverting their `MainActivity` callers would leave the branch uncompilable.
