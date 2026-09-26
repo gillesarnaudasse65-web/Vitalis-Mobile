@@ -129,6 +129,9 @@ class Run2WebViewTest {
             scenario.moveToState(androidx.lifecycle.Lifecycle.State.STARTED)
             scenario.moveToState(androidx.lifecycle.Lifecycle.State.RESUMED)
             assertEquals("\"2026-09-18\"", eval(scenario, "window.VitalisDate.get()"))
+            // Clear the previous document's signal before reload, so ready() cannot
+            // return while the old page is still visible during navigation.
+            eval(scenario, "window.__run2Ready=false;true")
             scenario.onActivity { activity ->
                 findWebView(activity.findViewById(android.R.id.content))?.reload()
             }
