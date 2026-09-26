@@ -3,7 +3,7 @@ name: Vitalis Android quality gates
 on:
   workflow_dispatch:
   pull_request:
-    branches: [main]
+    branches: [main, agent/vitalis-run1-build-test-security-foundation]
   push:
     branches: [main]
 
