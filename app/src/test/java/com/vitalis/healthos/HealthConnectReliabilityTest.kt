@@ -3,6 +3,7 @@ package com.vitalis.healthos
 import java.time.Duration
 import java.time.LocalDate
 import java.time.ZoneId
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.*
 import org.junit.Test
@@ -73,13 +74,43 @@ class HealthConnectReliabilityTest {
     }
 
     @Test fun pagerReadsOneTwoManyAndEmptyFinalPages() = runBlocking {
-        val pages = mapOf(
-            null to HealthRecordPage(listOf(FakeRecord("a", 1)), "p2"),
-            "p2" to HealthRecordPage(listOf(FakeRecord("b", 2)), "p3"),
-            "p3" to HealthRecordPage(emptyList(), null)
+        suspend fun read(pages: Map<String?, HealthRecordPage<FakeRecord>>) =
+            pager().readAll { pages[it] ?: error("unexpected token: $it") }
+
+        assertEquals(
+            listOf("one"),
+            read(mapOf(null to HealthRecordPage(listOf(FakeRecord("one", 1)), null)))
+                .map { it.id }
         )
-        val result = pager().readAll { pages[it] ?: error("unexpected token") }
-        assertEquals(listOf("a", "b"), result.map { it.id })
+        assertEquals(
+            listOf("a", "b"),
+            read(
+                mapOf(
+                    null to HealthRecordPage(listOf(FakeRecord("a", 1)), "p2"),
+                    "p2" to HealthRecordPage(listOf(FakeRecord("b", 2)), null)
+                )
+            ).map { it.id }
+        )
+        assertEquals(
+            listOf("a", "b", "c"),
+            read(
+                mapOf(
+                    null to HealthRecordPage(listOf(FakeRecord("a", 1)), "p2"),
+                    "p2" to HealthRecordPage(listOf(FakeRecord("b", 2)), "p3"),
+                    "p3" to HealthRecordPage(listOf(FakeRecord("c", 3)), "p4"),
+                    "p4" to HealthRecordPage(emptyList(), null)
+                )
+            ).map { it.id }
+        )
+        assertEquals(
+            listOf("after-empty"),
+            read(
+                mapOf(
+                    null to HealthRecordPage(emptyList(), "p2"),
+                    "p2" to HealthRecordPage(listOf(FakeRecord("after-empty", 4)), null)
+                )
+            ).map { it.id }
+        )
     }
 
     @Test fun pagerDeduplicatesWithinAndAcrossPagesButKeepsEqualValuesWithDifferentIds() =
@@ -121,6 +152,15 @@ class HealthConnectReliabilityTest {
             fail("Expected API failure")
         } catch (error: SecurityException) {
             assertEquals("revoked", error.message)
+        }
+    }
+
+    @Test fun cancellationIsPropagated() = runBlocking {
+        try {
+            pager().readAll { throw CancellationException("superseded") }
+            fail("Expected cancellation")
+        } catch (error: CancellationException) {
+            assertEquals("superseded", error.message)
         }
     }
 
