@@ -3,7 +3,10 @@ name: Vitalis Android quality gates
 on:
   workflow_dispatch:
   pull_request:
-    branches: [main, agent/vitalis-run1-build-test-security-foundation]
+    branches:
+      - main
+      - agent/vitalis-run1-build-test-security-foundation
+      - agent/vitalis-run3-health-connect-reliability
   push:
     branches: [main]
 
@@ -33,11 +36,13 @@ jobs:
       - name: Verify Gradle tasks and plugin initialization
         run: ./gradlew --no-daemon tasks
       - name: JavaScript source contract tests
-        run: node --test --test-reporter=spec --test-reporter-destination=stdout --test-reporter=junit --test-reporter-destination=run2-js.xml scripts/test-*.cjs
+        run: node --test --test-reporter=spec --test-reporter-destination=stdout --test-reporter=junit --test-reporter-destination=vitalis-js.xml scripts/test-*.cjs
       - name: Clean
         run: ./gradlew --no-daemon clean
       - name: Health Connect JVM tests (isolated)
         run: ./gradlew --no-daemon testDebugUnitTest --tests com.vitalis.healthos.HealthConnectReliabilityTest
+      - name: Nutrition reliability JVM tests (isolated)
+        run: ./gradlew --no-daemon testDebugUnitTest --tests com.vitalis.healthos.NutritionReliabilityTest
       - name: Android unit tests
         run: ./gradlew --no-daemon testDebugUnitTest --rerun-tasks
       - name: Android lint
@@ -48,18 +53,18 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: Vitalis-Run1-unit-lint-reports
+          name: Vitalis-unit-lint-reports
           path: |
             app/build/reports/tests/
             app/build/test-results/
             app/build/reports/lint-results-debug.*
-            run2-js.xml
+            vitalis-js.xml
           if-no-files-found: warn
           retention-days: 90
       - name: Upload APKs
         uses: actions/upload-artifact@v4
         with:
-          name: Vitalis-Run1-debug-apks
+          name: Vitalis-debug-apks
           path: |
             app/build/outputs/apk/debug/app-debug.apk
             app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
@@ -100,7 +105,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: Vitalis-Run1-instrumentation-reports
+          name: Vitalis-instrumentation-reports
           path: |
             app/build/reports/androidTests/
             app/build/outputs/androidTest-results/

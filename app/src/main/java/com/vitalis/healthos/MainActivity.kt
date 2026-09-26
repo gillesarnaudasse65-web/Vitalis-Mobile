@@ -42,8 +42,10 @@ import android.widget.ProgressBar
 import android.widget.TextView
 import androidx.activity.ComponentActivity
 import androidx.activity.OnBackPressedCallback
+import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
+import androidx.core.content.FileProvider
 import androidx.health.connect.client.HealthConnectClient
 import androidx.health.connect.client.PermissionController
 import androidx.health.connect.client.permission.HealthPermission
@@ -66,6 +68,7 @@ import kotlinx.coroutines.launch
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.BufferedReader
+import java.io.File
 import java.io.InputStreamReader
 import java.net.HttpURLConnection
 import java.net.URL
@@ -78,6 +81,7 @@ import java.time.Clock
 import androidx.core.content.edit
 import java.time.ZoneId
 import java.util.Locale
+import java.util.UUID
 import java.util.concurrent.atomic.AtomicLong
 import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
@@ -113,6 +117,15 @@ class MainActivity : ComponentActivity() {
     private var refreshAfterConnectorReturn = false
     private var bridgeRegistered = false
     private lateinit var appPreferences: SharedPreferences
+    private lateinit var nutritionImageProcessor: SafeNutritionImageProcessor
+    private lateinit var nutritionMealStore: NutritionMealStore
+    private val nutritionScanCoordinator = NutritionScanCoordinator()
+    private val normalizedNutritionImages = mutableMapOf<String, String>()
+    private var activeNutritionAnalysisJob: Job? = null
+    private val nutritionAnalysisGeneration = AtomicLong(0)
+    private var pendingNutritionCameraFile: File? = null
+    private var pendingNutritionCameraUri: Uri? = null
+    private var pendingNutritionExport: String? = null
 
     private val connectorCatalog = ConnectorCatalog.entries
 
@@ -146,6 +159,49 @@ class MainActivity : ComponentActivity() {
         filePathCallback = null
     }
 
+    private val mealPhotoPickerLauncher = registerForActivityResult(
+        ActivityResultContracts.PickVisualMedia()
+    ) { uri ->
+        if (uri == null) cancelCurrentNutritionScan("picker_cancelled")
+        else handleNutritionImageUri(uri)
+    }
+
+    private val mealCameraLauncher = registerForActivityResult(
+        ActivityResultContracts.TakePicture()
+    ) { captured ->
+        val uri = pendingNutritionCameraUri
+        if (captured && uri != null) handleNutritionImageUri(uri)
+        else {
+            pendingNutritionCameraFile?.delete()
+            pendingNutritionCameraFile = null
+            pendingNutritionCameraUri = null
+            cancelCurrentNutritionScan("camera_cancelled")
+        }
+    }
+
+    private val nutritionExportLauncher = registerForActivityResult(
+        ActivityResultContracts.CreateDocument("application/json")
+    ) { uri ->
+        val export = pendingNutritionExport
+        pendingNutritionExport = null
+        if (uri == null || export == null) {
+            dispatchNutritionOperation("export", false, "export_cancelled")
+            return@registerForActivityResult
+        }
+        lifecycleScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            val saved = runCatching {
+                contentResolver.openOutputStream(uri, "wt")?.use { stream ->
+                    stream.write(export.toByteArray(StandardCharsets.UTF_8))
+                } ?: error("unwritable_uri")
+            }.isSuccess
+            dispatchNutritionOperation(
+                "export",
+                saved,
+                if (saved) null else "export_write_failed"
+            )
+        }
+    }
+
     private val microphonePermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { granted ->
@@ -177,15 +233,38 @@ class MainActivity : ComponentActivity() {
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        savedInstanceState?.getString(STATE_NUTRITION_CAMERA_FILE)?.let { fileName ->
+            if (Regex("capture-[A-Za-z0-9-]+\\.jpg").matches(fileName)) {
+                pendingNutritionCameraFile = File(File(cacheDir, "nutrition-captures"), fileName)
+                pendingNutritionCameraUri = savedInstanceState
+                    .getString(STATE_NUTRITION_CAMERA_URI)
+                    ?.let(Uri::parse)
+            }
+        }
         val deviceClock = if (BuildConfig.DEBUG && (
                 intent.getBooleanExtra(EXTRA_RUN2_FIXTURE, false) ||
-                    intent.getBooleanExtra(EXTRA_RUN3_FIXTURE, false)
+                    intent.getBooleanExtra(EXTRA_RUN3_FIXTURE, false) ||
+                    intent.getBooleanExtra(EXTRA_RUN4_FIXTURE, false)
                 )) {
             val fixed = BridgeInputPolicy.date(intent.getStringExtra(EXTRA_TEST_TODAY_ISO))
             fixed?.let { Clock.fixed(it.atStartOfDay(java.time.ZoneId.systemDefault()).toInstant(),
                 java.time.ZoneId.systemDefault()) } ?: Clock.systemDefaultZone()
         } else Clock.systemDefaultZone()
         appPreferences = getSharedPreferences(APP_PREFS, MODE_PRIVATE)
+        nutritionImageProcessor = SafeNutritionImageProcessor(this)
+        nutritionMealStore = NutritionMealStore(object : NutritionStringStorage {
+            override fun read(): String? = appPreferences.getString(MANUAL_MEALS_KEY, "[]")
+            override fun write(value: String): Boolean =
+                appPreferences.edit().putString(MANUAL_MEALS_KEY, value).commit()
+            override fun remove(): Boolean =
+                appPreferences.edit().remove(MANUAL_MEALS_KEY).commit()
+        }, deviceClock)
+        nutritionMealStore.migrate()
+        appPreferences.getString(PENDING_NUTRITION_SCAN_KEY, null)?.let { raw ->
+            runCatching { JSONObject(raw).optString("scanId") }.getOrNull()
+                ?.takeIf(NutritionIds::valid)
+                ?.let(::restoreNutritionSession)
+        }
         dateState = SelectedDateState(deviceClock, appPreferences.getString(SELECTED_HEALTH_DATE_KEY, null)) {
             appPreferences.edit { putString(SELECTED_HEALTH_DATE_KEY, it) }
         }
@@ -336,6 +415,8 @@ class MainActivity : ComponentActivity() {
                 BuildConfig.DEBUG && intent.getBooleanExtra(EXTRA_RUN2_FIXTURE, false) -> LOCAL_TEST_URL
                 BuildConfig.DEBUG && intent.getBooleanExtra(EXTRA_RUN3_FIXTURE, false) ->
                     LOCAL_RUN3_TEST_URL
+                BuildConfig.DEBUG && intent.getBooleanExtra(EXTRA_RUN4_FIXTURE, false) ->
+                    LOCAL_RUN4_TEST_URL
                 BuildConfig.DEBUG && intent.getBooleanExtra(EXTRA_FORCE_OFFLINE_FOR_TESTS, false) -> LOCAL_URL
                 else -> VITALIS_URL
             })
@@ -345,7 +426,8 @@ class MainActivity : ComponentActivity() {
 
         if (!(BuildConfig.DEBUG && (intent.getBooleanExtra(EXTRA_FORCE_OFFLINE_FOR_TESTS, false) ||
                     intent.getBooleanExtra(EXTRA_RUN2_FIXTURE, false) ||
-                    intent.getBooleanExtra(EXTRA_RUN3_FIXTURE, false))))
+                    intent.getBooleanExtra(EXTRA_RUN3_FIXTURE, false) ||
+                    intent.getBooleanExtra(EXTRA_RUN4_FIXTURE, false))))
             scheduleClassicInterfaceTimeout()
 
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
@@ -438,6 +520,11 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onDestroy() {
+        activeNutritionAnalysisJob?.cancel()
+        activeNutritionAnalysisJob = null
+        if (isFinishing) pendingNutritionCameraFile?.delete()
+        pendingNutritionCameraFile = null
+        pendingNutritionCameraUri = null
         filePathCallback?.onReceiveValue(null)
         filePathCallback = null
         stopMicrophone()
@@ -448,6 +535,16 @@ class MainActivity : ComponentActivity() {
         textToSpeech = null
         if (::webView.isInitialized) webView.destroy()
         super.onDestroy()
+    }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        pendingNutritionCameraFile?.name?.let {
+            outState.putString(STATE_NUTRITION_CAMERA_FILE, it)
+        }
+        pendingNutritionCameraUri?.toString()?.let {
+            outState.putString(STATE_NUTRITION_CAMERA_URI, it)
+        }
+        super.onSaveInstanceState(outState)
     }
 
     private fun showConnectionError() {
@@ -569,6 +666,7 @@ class MainActivity : ComponentActivity() {
                 .edit()
                 .putBoolean(AI_HEALTH_CONSENT, consented)
                 .apply()
+            if (!consented) invalidateActiveNutritionAnalysis("consent_revoked")
         }
 
         @JavascriptInterface
@@ -588,26 +686,58 @@ class MainActivity : ComponentActivity() {
 
         @JavascriptInterface
         fun analyzeMealImage(imageDataUrl: String, requestId: String) {
-            if (!BridgeInputPolicy.requestId(requestId)) return
-            if (!BridgeInputPolicy.mealImage(imageDataUrl)) {
-                dispatchAiResponse(requestId, false, "", "Image non valide ou trop volumineuse.", "nutrition")
-                return
-            }
-            requestCoach(
-                "Analyse cette photo de repas et réponds uniquement avec un objet JSON valide, sans balises Markdown, " +
-                    "contenant exactement : name (texte), foods (tableau de textes), caloriesKcal, carbohydratesGrams, " +
-                    "proteinGrams, fatGrams, fiberGrams, sugarGrams, sodiumMilligrams (nombres positifs), confidence " +
-                    "(nombre de 0 à 1), summary (texte court) et improvement (texte court). Donne une estimation prudente " +
-                    "et mets 0 lorsqu’une valeur ne peut pas être estimée.",
-                "nutrition",
+            if (BridgeInputPolicy.requestId(requestId)) dispatchAiResponse(
                 requestId,
-                imageDataUrl
+                false,
+                "",
+                "Utilisez le sélecteur nutrition sécurisé de Vitalis.",
+                "nutrition"
             )
         }
 
         @JavascriptInterface
         fun saveMealEstimate(estimateJson: String): Boolean =
-            saveManualMealEstimate(estimateJson)
+            saveLegacyMealEstimate(estimateJson)
+
+        @JavascriptInterface
+        fun beginNutritionScan(scanId: String, selectedDateIso: String, source: String): Boolean =
+            beginNutritionScanInternal(scanId, selectedDateIso, source)
+
+        @JavascriptInterface
+        fun cancelNutritionScan(scanId: String) {
+            cancelNutritionScanInternal(scanId, "user_cancelled")
+        }
+
+        @JavascriptInterface
+        fun analyzeMealSession(scanId: String, requestId: String) {
+            analyzeNutritionSession(scanId, requestId)
+        }
+
+        @JavascriptInterface
+        fun saveNutritionMeal(scanId: String, estimateJson: String): String =
+            saveNutritionMealInternal(scanId, estimateJson).toString()
+
+        @JavascriptInterface
+        fun getPendingNutritionScan(): String =
+            nutritionScanCoordinator.active()?.let(::nutritionScanSessionJson)?.toString() ?: "null"
+
+        @JavascriptInterface
+        fun getLocalNutritionMeals(dateIso: String?): String =
+            localNutritionMealsPayload(dateIso).toString()
+
+        @JavascriptInterface
+        fun updateLocalNutritionMeal(mealJson: String): String =
+            updateLocalNutritionMealInternal(mealJson).toString()
+
+        @JavascriptInterface
+        fun deleteLocalNutritionMeal(mealId: String): String =
+            deleteLocalNutritionMealInternal(mealId).toString()
+
+        @JavascriptInterface
+        fun exportLocalNutrition(): Boolean = exportLocalNutritionInternal()
+
+        @JavascriptInterface
+        fun deleteAllLocalNutritionData(): Boolean = deleteAllLocalNutritionDataInternal()
 
         @JavascriptInterface
         fun sendDeveloperRequestToChatGpt(request: String) {
@@ -899,8 +1029,12 @@ class MainActivity : ComponentActivity() {
         requestId: String,
         imageDataUrl: String?,
         agentId: String,
-        includeHealthContext: Boolean
-    ) {
+        includeHealthContext: Boolean,
+        responseTransform: (String) -> String = { it },
+        responseGuard: () -> Boolean = { true },
+        onAccepted: (String) -> Unit = {},
+        onRejected: (String) -> Unit = {}
+    ): Job {
         val context = if (includeHealthContext) {
             "\n\nDonnées Vitalis disponibles (peuvent être incomplètes) : ${sanitizedHealthContext()}"
         } else {
@@ -908,8 +1042,8 @@ class MainActivity : ComponentActivity() {
                 "interface classique à préserver; dépôt gillesarnaudasse65-web/Vitalis-Mobile; " +
                 "Health Connect natif; les changements réels exigent validation, modification du dépôt, tests et build GitHub Actions."
         }
-        lifecycleScope.launch(kotlinx.coroutines.Dispatchers.IO) {
-            runCatching {
+        return lifecycleScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            try {
                 val inputContent = JSONArray().apply {
                     put(JSONObject().apply {
                         put("type", "input_text")
@@ -937,17 +1071,26 @@ class MainActivity : ComponentActivity() {
                     }))
                 }
                 val response = postOpenAi(apiKey, body)
-                extractResponseText(response)
-            }.onSuccess { answer ->
-                dispatchAiResponse(requestId, true, answer, null, agentId)
-            }.onFailure { error ->
-                dispatchAiResponse(
-                    requestId,
-                    false,
-                    "",
-                    error.message?.take(300) ?: "Le service IA est momentanément indisponible.",
-                    agentId
-                )
+                val answer = responseTransform(extractResponseText(response))
+                if (responseGuard()) {
+                    onAccepted(answer)
+                    dispatchAiResponse(requestId, true, answer, null, agentId)
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                if (responseGuard()) {
+                    val message = error.message?.take(300)
+                        ?: "Le service IA est momentanément indisponible."
+                    onRejected(message)
+                    dispatchAiResponse(
+                        requestId,
+                        false,
+                        "",
+                        message,
+                        agentId
+                    )
+                }
             }
         }
     }
@@ -1089,62 +1232,463 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun saveManualMealEstimate(rawJson: String): Boolean {
-        if (!BridgeInputPolicy.mealJsonSize(rawJson)) return false
-        val parsed = runCatching { JSONObject(rawJson) }.getOrNull()
-            ?: return false
-        val name = parsed.optString("name").trim().take(120).ifBlank { "Repas analysé" }
-        val selectedDate = parsed.optString("selectedDate")
-            .takeIf { it.isNotBlank() }
-            ?.let { runCatching { LocalDate.parse(it) }.getOrNull() }
-            ?: selectedHealthDate
-        val record = JSONObject().apply {
-            put("id", "scanner-${System.currentTimeMillis()}")
-            put("name", name)
-            put("selectedDate", selectedDate.toString())
-            put("recordedAt", Instant.now().toString())
-            put("caloriesKcal", nonNegativeNumber(parsed, "caloriesKcal"))
-            put("carbohydratesGrams", nonNegativeNumber(parsed, "carbohydratesGrams"))
-            put("proteinGrams", nonNegativeNumber(parsed, "proteinGrams"))
-            put("fatGrams", nonNegativeNumber(parsed, "fatGrams"))
-            put("fiberGrams", nonNegativeNumber(parsed, "fiberGrams"))
-            put("sugarGrams", nonNegativeNumber(parsed, "sugarGrams"))
-            put("sodiumMilligrams", nonNegativeNumber(parsed, "sodiumMilligrams"))
-            put("confidence", parsed.optDouble("confidence", 0.0).coerceIn(0.0, 1.0))
-            put("summary", parsed.optString("summary").trim().take(500))
-            put("improvement", parsed.optString("improvement").trim().take(500))
-            put("source", "Vitalis Scanner")
+    private fun beginNutritionScanInternal(
+        scanId: String,
+        selectedDateIso: String,
+        sourceValue: String
+    ): Boolean {
+        if (!NutritionIds.valid(scanId)) return false
+        val date = BridgeInputPolicy.date(selectedDateIso) ?: return false
+        val source = when (sourceValue.trim().lowercase(Locale.ROOT)) {
+            "gallery" -> NutritionImageSource.GALLERY
+            "camera" -> NutritionImageSource.CAMERA
+            "synthetic_test" -> if (BuildConfig.DEBUG &&
+                intent.getBooleanExtra(EXTRA_RUN4_FIXTURE, false)) NutritionImageSource.SYNTHETIC_TEST
+                else return false
+            else -> return false
         }
-        return runCatching {
-            val preferences = getSharedPreferences(APP_PREFS, MODE_PRIVATE)
-            val existing = runCatching {
-                JSONArray(preferences.getString(MANUAL_MEALS_KEY, "[]"))
-            }.getOrDefault(JSONArray())
-            val updated = JSONArray()
-            val first = (existing.length() - MAX_MANUAL_MEALS + 1).coerceAtLeast(0)
-            for (index in first until existing.length()) updated.put(existing.optJSONObject(index))
-            updated.put(record)
-            preferences.edit().putString(MANUAL_MEALS_KEY, updated.toString()).apply()
-            selectedHealthDate = selectedDate
-            readHealthData(selectedDate)
-            true
-        }.getOrDefault(false)
-    }
-
-    private fun nonNegativeNumber(source: JSONObject, key: String): Double {
-        val value = source.optDouble(key, 0.0)
-        return if (value.isFinite()) value.coerceAtLeast(0.0) else 0.0
-    }
-
-    private fun manualMealsForDate(date: LocalDate): List<JSONObject> {
-        val raw = getSharedPreferences(APP_PREFS, MODE_PRIVATE).getString(MANUAL_MEALS_KEY, "[]")
-        val records = runCatching { JSONArray(raw) }.getOrDefault(JSONArray())
-        return buildList {
-            for (index in 0 until records.length()) {
-                val item = records.optJSONObject(index) ?: continue
-                if (item.optString("selectedDate") == date.toString()) add(item)
+        val supersededScanId = nutritionScanCoordinator.active()?.scanId
+        invalidateActiveNutritionAnalysis("superseded_by_new_scan")
+        supersededScanId?.let { oldScanId ->
+            normalizedNutritionImages.remove(oldScanId)
+            nutritionScanCoordinator.cancel(oldScanId)?.also(::dispatchNutritionScanState)
+        }
+        val session = nutritionScanCoordinator.begin(scanId, date, source, Instant.now())
+        persistNutritionSession(session)
+        dispatchNutritionScanState(session)
+        runOnUiThread {
+            when (source) {
+                NutritionImageSource.GALLERY -> mealPhotoPickerLauncher.launch(
+                    PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                )
+                NutritionImageSource.CAMERA -> launchNutritionCamera()
+                NutritionImageSource.SYNTHETIC_TEST -> processSyntheticNutritionImage()
             }
         }
+        return true
+    }
+
+    private fun launchNutritionCamera() {
+        val directory = File(cacheDir, "nutrition-captures").apply { mkdirs() }
+        val file = File(directory, "capture-${UUID.randomUUID()}.jpg")
+        val uri = runCatching {
+            FileProvider.getUriForFile(
+                this,
+                "$packageName.nutrition.fileprovider",
+                file
+            )
+        }.getOrElse {
+            cancelCurrentNutritionScan("camera_unavailable")
+            return
+        }
+        pendingNutritionCameraFile = file
+        pendingNutritionCameraUri = uri
+        runCatching { mealCameraLauncher.launch(uri) }.onFailure {
+            file.delete()
+            pendingNutritionCameraFile = null
+            pendingNutritionCameraUri = null
+            cancelCurrentNutritionScan("camera_unavailable")
+        }
+    }
+
+    private fun handleNutritionImageUri(uri: Uri) {
+        val session = nutritionScanCoordinator.active() ?: return
+        nutritionScanCoordinator.markNormalizing(session.scanId)?.also {
+            persistNutritionSession(it)
+            dispatchNutritionScanState(it)
+        }
+        lifecycleScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            val result = nutritionImageProcessor.process(uri)
+            pendingNutritionCameraFile?.delete()
+            pendingNutritionCameraFile = null
+            pendingNutritionCameraUri = null
+            handleNutritionImageResult(session.scanId, result)
+        }
+    }
+
+    private fun processSyntheticNutritionImage() {
+        val session = nutritionScanCoordinator.active() ?: return
+        nutritionScanCoordinator.markNormalizing(session.scanId)?.also(::dispatchNutritionScanState)
+        lifecycleScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            val bitmap = Bitmap.createBitmap(16, 12, Bitmap.Config.ARGB_8888).apply {
+                eraseColor(Color.rgb(222, 145, 55))
+            }
+            val stream = java.io.ByteArrayOutputStream()
+            bitmap.compress(Bitmap.CompressFormat.PNG, 100, stream)
+            bitmap.recycle()
+            handleNutritionImageResult(
+                session.scanId,
+                nutritionImageProcessor.processBytes(stream.toByteArray(), "image/png")
+            )
+        }
+    }
+
+    private fun handleNutritionImageResult(scanId: String, result: NutritionImageProcessResult) {
+        if (!nutritionScanCoordinator.isCurrent(scanId)) return
+        val image = result.image
+        if (image == null) {
+            nutritionScanCoordinator.fail(scanId, result.errorCode ?: "image_error")?.also {
+                persistNutritionSession(it)
+                dispatchNutritionScanState(it, result.userMessage)
+            }
+            return
+        }
+        normalizedNutritionImages[scanId] = image.dataUrl
+        val session = nutritionScanCoordinator.markImageReady(scanId, image.metadata) ?: return
+        persistNutritionSession(session)
+        dispatchNutritionScanState(session)
+        dispatchWebEvent("vitalis-nutrition-image-ready", JSONObject().apply {
+            put("scanId", scanId)
+            put("selectedDate", session.selectedDate.toString())
+            put("preview", image.dataUrl)
+            put("metadata", normalizedImageMetadataJson(image.metadata))
+        })
+    }
+
+    private fun cancelCurrentNutritionScan(reason: String) {
+        nutritionScanCoordinator.active()?.scanId?.let { cancelNutritionScanInternal(it, reason) }
+    }
+
+    private fun cancelNutritionScanInternal(scanId: String, reason: String) {
+        if (!NutritionIds.valid(scanId)) return
+        if (nutritionScanCoordinator.active()?.scanId == scanId) invalidateActiveNutritionAnalysis(reason)
+        normalizedNutritionImages.remove(scanId)
+        nutritionScanCoordinator.cancel(scanId)?.also {
+            persistNutritionSession(it)
+            dispatchNutritionScanState(it)
+        }
+    }
+
+    private fun analyzeNutritionSession(scanId: String, requestId: String) {
+        if (!NutritionIds.valid(scanId) || !BridgeInputPolicy.requestId(requestId)) return
+        val session = nutritionScanCoordinator.session(scanId) ?: return
+        val imageDataUrl = normalizedNutritionImages[scanId]
+        if (!BridgeInputPolicy.mealImage(imageDataUrl) ||
+            session.analysisStatus !in setOf(
+                NutritionScanStatus.READY_FOR_ANALYSIS,
+                NutritionScanStatus.REVIEW,
+                NutritionScanStatus.ERROR
+            )) {
+            dispatchAiResponse(requestId, false, "", "Photo normalisée indisponible.", "nutrition")
+            return
+        }
+        if (!hasAiHealthConsentInternal()) {
+            dispatchAiResponse(requestId, false, "", "Consentement requis avant l’envoi externe.", "nutrition")
+            return
+        }
+        val apiKey = readOpenAiKey()
+        if (apiKey == null && !isRun4Fixture()) {
+            dispatchAiResponse(requestId, false, "", "Clé OpenAI non configurée.", "nutrition")
+            return
+        }
+        activeNutritionAnalysisJob?.cancel()
+        val generation = nutritionAnalysisGeneration.incrementAndGet()
+        val analyzing = nutritionScanCoordinator.startAnalysis(scanId, requestId) ?: return
+        persistNutritionSession(analyzing)
+        dispatchNutritionScanState(analyzing)
+        if (isRun4Fixture()) {
+            val result = NutritionEstimateParser.parseForReview(RUN4_MOCK_ANALYSIS)
+            val estimate = result.value ?: return
+            nutritionScanCoordinator.acceptAnalysis(scanId, requestId, estimate)?.also {
+                persistNutritionSession(it)
+                dispatchNutritionScanState(it)
+            }
+            dispatchAiResponse(
+                requestId,
+                true,
+                NutritionEstimateParser.toReviewJson(result).toString(),
+                null,
+                "nutrition"
+            )
+            return
+        }
+        var parsed: NutritionValidationResult<NutritionEstimate>? = null
+        activeNutritionAnalysisJob = requestAi(
+            apiKey = apiKey!!,
+            instructions = coachInstructions("nutrition"),
+            prompt = NUTRITION_ANALYSIS_PROMPT,
+            requestId = requestId,
+            imageDataUrl = imageDataUrl,
+            agentId = "nutrition",
+            includeHealthContext = true,
+            responseTransform = { raw ->
+                NutritionEstimateParser.parseForReview(raw).also { parsed = it }.let { result ->
+                    if (!result.reviewable) throw IllegalArgumentException(
+                        "Réponse nutritionnelle invalide : ${result.errors.joinToString()}"
+                    )
+                    NutritionEstimateParser.toReviewJson(result).toString()
+                }
+            },
+            responseGuard = {
+                generation == nutritionAnalysisGeneration.get() &&
+                    hasAiHealthConsentInternal() &&
+                    isCurrentNutritionScan(scanId, requestId)
+            },
+            onAccepted = {
+                parsed?.value?.let { estimate ->
+                    nutritionScanCoordinator.acceptAnalysis(scanId, requestId, estimate)?.also { accepted ->
+                        persistNutritionSession(accepted)
+                        dispatchNutritionScanState(accepted)
+                    }
+                }
+            },
+            onRejected = {
+                nutritionScanCoordinator.fail(scanId, "analysis_failed")?.also { failed ->
+                    persistNutritionSession(failed)
+                    dispatchNutritionScanState(failed, it)
+                }
+            }
+        )
+    }
+
+    internal fun isCurrentNutritionScan(scanId: String, requestId: String): Boolean =
+        nutritionScanCoordinator.isCurrent(scanId, requestId)
+
+    private fun invalidateActiveNutritionAnalysis(reason: String) {
+        activeNutritionAnalysisJob?.cancel()
+        activeNutritionAnalysisJob = null
+        nutritionAnalysisGeneration.incrementAndGet()
+        nutritionScanCoordinator.active()?.takeIf {
+            it.analysisStatus == NutritionScanStatus.ANALYZING
+        }?.let { session ->
+            nutritionScanCoordinator.fail(session.scanId, reason)?.also {
+                persistNutritionSession(it)
+                dispatchNutritionScanState(it)
+            }
+        }
+    }
+
+    private fun hasAiHealthConsentInternal(): Boolean =
+        appPreferences.getBoolean(AI_HEALTH_CONSENT, false) || isRun4Fixture()
+
+    private fun isRun4Fixture(): Boolean = BuildConfig.DEBUG &&
+        intent.getBooleanExtra(EXTRA_RUN4_FIXTURE, false)
+
+    private fun saveLegacyMealEstimate(rawJson: String): Boolean {
+        val source = runCatching { JSONObject(rawJson) }.getOrNull() ?: return false
+        val scanId = source.optString("scanId")
+        if (!NutritionIds.valid(scanId)) return false
+        return saveNutritionMealInternal(scanId, rawJson).optBoolean("ok", false)
+    }
+
+    private fun saveNutritionMealInternal(scanId: String, rawEstimate: String): JSONObject {
+        if (!NutritionIds.valid(scanId) || !BridgeInputPolicy.mealJsonSize(rawEstimate)) {
+            return nutritionResult(false, "invalid_payload")
+        }
+        val session = nutritionScanCoordinator.session(scanId)
+            ?: restoreNutritionSession(scanId)
+            ?: return nutritionResult(false, "unknown_scan")
+        val parsed = NutritionEstimateParser.parseForReview(rawEstimate)
+        val estimate = parsed.value
+        if (!parsed.savable || estimate == null) {
+            return nutritionResult(false, "invalid_estimate", parsed.errors + parsed.warnings)
+        }
+        nutritionScanCoordinator.startSaving(scanId)?.also(::dispatchNutritionScanState)
+        val existing = nutritionMealStore.list().value?.firstOrNull { it.id == session.mealId }
+        val now = Instant.now()
+        val record = NutritionMealRecord(
+            id = session.mealId,
+            date = session.selectedDate,
+            createdAt = existing?.createdAt ?: session.createdAt,
+            updatedAt = now,
+            source = "Vitalis Scanner",
+            scanId = scanId,
+            mealName = estimate.mealName,
+            foodItems = estimate.foodItems,
+            nutrients = estimate.nutrients,
+            confidence = estimate.confidence,
+            notes = estimate.uncertaintyNotes,
+            estimated = true
+        )
+        val saved = nutritionMealStore.upsert(record)
+        if (!saved.success) {
+            nutritionScanCoordinator.fail(scanId, saved.errorCode ?: "save_failed")?.also(::dispatchNutritionScanState)
+            return nutritionResult(false, saved.errorCode ?: "save_failed")
+        }
+        val completed = nutritionScanCoordinator.markSaved(scanId)
+        completed?.also {
+            persistNutritionSession(it)
+            dispatchNutritionScanState(it)
+        }
+        normalizedNutritionImages.remove(scanId)
+        readHealthData(session.selectedDate)
+        return nutritionResult(true, null).apply {
+            put("meal", NutritionMealCodec.encode(record))
+            put("created", existing == null)
+        }
+    }
+
+    private fun localNutritionMealsPayload(dateIso: String?): JSONObject {
+        val date = dateIso?.takeIf { it.isNotBlank() }?.let(BridgeInputPolicy::date)
+        if (dateIso != null && dateIso.isNotBlank() && date == null) {
+            return nutritionResult(false, "invalid_date")
+        }
+        val result = nutritionMealStore.list(date)
+        return nutritionResult(result.success, result.errorCode).apply {
+            put("meals", JSONArray(result.value.orEmpty().map(NutritionMealCodec::encode)))
+            put("preservedInvalidRecords", result.preservedInvalidRecords)
+        }
+    }
+
+    private fun updateLocalNutritionMealInternal(raw: String): JSONObject {
+        val parsed = NutritionMealInput.parse(raw, Clock.systemUTC())
+        val candidate = parsed.value ?: return nutritionResult(false, parsed.errors.firstOrNull() ?: "invalid_meal")
+        val existing = nutritionMealStore.list().value?.firstOrNull { it.id == candidate.id }
+            ?: return nutritionResult(false, "meal_not_found")
+        val updated = candidate.copy(
+            createdAt = existing.createdAt,
+            updatedAt = Instant.now(),
+            scanId = existing.scanId,
+            source = existing.source
+        )
+        val result = nutritionMealStore.upsert(updated)
+        if (result.success) readHealthData(updated.date)
+        return nutritionResult(result.success, result.errorCode).apply {
+            if (result.success) put("meal", NutritionMealCodec.encode(updated))
+        }
+    }
+
+    private fun deleteLocalNutritionMealInternal(mealId: String): JSONObject {
+        val existing = nutritionMealStore.list().value?.firstOrNull { it.id == mealId }
+        val result = nutritionMealStore.delete(mealId)
+        if (result.value == true) readHealthData(existing?.date ?: selectedHealthDate)
+        return nutritionResult(result.success, result.errorCode).apply {
+            put("deleted", result.value == true)
+        }
+    }
+
+    private fun exportLocalNutritionInternal(): Boolean {
+        val result = nutritionMealStore.list()
+        val meals = result.value ?: return false
+        pendingNutritionExport = NutritionExportCodec.encode(
+            meals,
+            Instant.now(),
+            BuildConfig.VERSION_NAME
+        )
+        runOnUiThread {
+            nutritionExportLauncher.launch("vitalis-nutrition-${LocalDate.now()}.json")
+        }
+        return true
+    }
+
+    private fun deleteAllLocalNutritionDataInternal(): Boolean {
+        val result = nutritionMealStore.deleteAll()
+        if (result.success) {
+            val activeScanId = nutritionScanCoordinator.active()?.scanId
+            invalidateActiveNutritionAnalysis("local_data_deleted")
+            activeScanId?.let { nutritionScanCoordinator.cancel(it) }
+            normalizedNutritionImages.clear()
+            appPreferences.edit().remove(PENDING_NUTRITION_SCAN_KEY).apply()
+            dispatchWebEvent("vitalis-nutrition-local-cleared", JSONObject().put("ok", true))
+            readHealthData(selectedHealthDate)
+        }
+        dispatchNutritionOperation("delete_all", result.success, result.errorCode)
+        return result.success
+    }
+
+    private fun manualMealsForDate(date: LocalDate): List<JSONObject> =
+        nutritionMealStore.list(date).value.orEmpty().map(NutritionMealCodec::encode)
+
+    private fun nutritionResult(ok: Boolean, error: String?, issues: List<String> = emptyList()) =
+        JSONObject().apply {
+            put("ok", ok)
+            put("error", error ?: JSONObject.NULL)
+            put("issues", JSONArray(issues))
+        }
+
+    private fun persistNutritionSession(session: NutritionScanSession) {
+        val payload = JSONObject().apply {
+            put("schemaVersion", 1)
+            put("scanId", session.scanId)
+            put("createdAt", session.createdAt.toString())
+            put("selectedDate", session.selectedDate.toString())
+            put("imageSource", session.imageSource.name)
+            put("analysisStatus", session.analysisStatus.name)
+            put("analysisRequestId", session.analysisRequestId ?: JSONObject.NULL)
+            put("savedMealId", session.savedMealId ?: JSONObject.NULL)
+            put("errorCode", session.errorCode ?: JSONObject.NULL)
+        }
+        appPreferences.edit().putString(PENDING_NUTRITION_SCAN_KEY, payload.toString()).apply()
+    }
+
+    private fun restoreNutritionSession(expectedScanId: String): NutritionScanSession? {
+        val raw = appPreferences.getString(PENDING_NUTRITION_SCAN_KEY, null) ?: return null
+        val source = runCatching { JSONObject(raw) }.getOrNull() ?: return null
+        val scanId = source.optString("scanId")
+        if (scanId != expectedScanId || !NutritionIds.valid(scanId)) return null
+        val date = BridgeInputPolicy.date(source.optString("selectedDate")) ?: return null
+        val createdAt = runCatching { Instant.parse(source.optString("createdAt")) }.getOrNull()
+            ?: return null
+        val imageSource = runCatching {
+            NutritionImageSource.valueOf(source.optString("imageSource"))
+        }.getOrNull() ?: return null
+        val persistedStatus = runCatching {
+            NutritionScanStatus.valueOf(source.optString("analysisStatus"))
+        }.getOrNull() ?: return null
+        val restoredStatus = if (persistedStatus in setOf(
+                NutritionScanStatus.NORMALIZING,
+                NutritionScanStatus.READY_FOR_ANALYSIS,
+                NutritionScanStatus.ANALYZING
+            )) NutritionScanStatus.ERROR else persistedStatus
+        return nutritionScanCoordinator.restore(
+            NutritionScanSession(
+                scanId = scanId,
+                mealId = "meal-$scanId",
+                createdAt = createdAt,
+                selectedDate = date,
+                imageSource = imageSource,
+                analysisStatus = restoredStatus,
+                analysisRequestId = source.optString("analysisRequestId")
+                    .takeIf { source.has("analysisRequestId") && !source.isNull("analysisRequestId") && it.isNotBlank() },
+                savedMealId = source.optString("savedMealId")
+                    .takeIf { source.has("savedMealId") && !source.isNull("savedMealId") && it.isNotBlank() },
+                errorCode = if (restoredStatus == NutritionScanStatus.ERROR) "scan_interrupted"
+                    else source.optString("errorCode")
+                        .takeIf { source.has("errorCode") && !source.isNull("errorCode") && it.isNotBlank() }
+            )
+        )
+    }
+
+    private fun normalizedImageMetadataJson(metadata: NormalizedImageMetadata) = JSONObject().apply {
+        put("sourceMimeType", metadata.sourceMimeType)
+        put("sourceBytes", metadata.sourceBytes)
+        put("sourceWidth", metadata.sourceWidth)
+        put("sourceHeight", metadata.sourceHeight)
+        put("normalizedMimeType", metadata.normalizedMimeType)
+        put("normalizedBytes", metadata.normalizedBytes)
+        put("normalizedWidth", metadata.normalizedWidth)
+        put("normalizedHeight", metadata.normalizedHeight)
+        put("orientationApplied", metadata.orientationApplied)
+    }
+
+    private fun dispatchNutritionScanState(
+        session: NutritionScanSession,
+        message: String? = null
+    ) {
+        dispatchWebEvent(
+            "vitalis-nutrition-scan-state",
+            nutritionScanSessionJson(session).apply { put("message", message ?: JSONObject.NULL) }
+        )
+    }
+
+    private fun nutritionScanSessionJson(session: NutritionScanSession) = JSONObject().apply {
+        put("scanId", session.scanId)
+        put("mealId", session.mealId)
+        put("selectedDate", session.selectedDate.toString())
+        put("source", session.imageSource.name.lowercase(Locale.ROOT))
+        put("status", session.analysisStatus.name.lowercase(Locale.ROOT))
+        put("requestId", session.analysisRequestId ?: JSONObject.NULL)
+        put("savedMealId", session.savedMealId ?: JSONObject.NULL)
+        put("errorCode", session.errorCode ?: JSONObject.NULL)
+        session.normalizedImageMetadata?.let { put("image", normalizedImageMetadataJson(it)) }
+    }
+
+    private fun dispatchNutritionOperation(operation: String, ok: Boolean, error: String?) {
+        dispatchWebEvent("vitalis-nutrition-operation", JSONObject().apply {
+            put("operation", operation)
+            put("ok", ok)
+            put("error", error ?: JSONObject.NULL)
+        })
     }
 
     private fun handleConnectorAuthorization(connectorId: String) {
@@ -1464,6 +2008,18 @@ class MainActivity : ComponentActivity() {
             lastHealthPayload = payload
             dispatchHealthData(payload)
             dispatchSyncState(state.code.name.lowercase(Locale.US))
+            return
+        }
+        if (BuildConfig.DEBUG && intent.getBooleanExtra(EXTRA_RUN4_FIXTURE, false)) {
+            debugRefreshRequests.add(selectedDate.toString())
+            dispatchManualOnlyHealthData(
+                selectedDate,
+                HealthConnectStateModel(
+                    HealthConnectStateCode.NOT_SUPPORTED,
+                    "Fixture nutrition locale",
+                    reason = "run4_fixture"
+                )
+            )
             return
         }
         val client = healthConnectClient
@@ -2182,6 +2738,7 @@ class MainActivity : ComponentActivity() {
         internal const val EXTRA_FORCE_OFFLINE_FOR_TESTS = "com.vitalis.healthos.FORCE_OFFLINE_TEST"
         internal const val EXTRA_RUN2_FIXTURE = "com.vitalis.healthos.RUN2_FIXTURE"
         internal const val EXTRA_RUN3_FIXTURE = "com.vitalis.healthos.RUN3_FIXTURE"
+        internal const val EXTRA_RUN4_FIXTURE = "com.vitalis.healthos.RUN4_FIXTURE"
         internal const val EXTRA_TEST_TODAY_ISO = "com.vitalis.healthos.TEST_TODAY_ISO"
         private const val SELECTED_HEALTH_DATE_KEY = "selected_health_date_iso"
         private const val HEALTH_PERMISSION_REQUESTED_KEY =
@@ -2194,6 +2751,8 @@ class MainActivity : ComponentActivity() {
         private const val LOCAL_TEST_URL = "https://$LOCAL_ASSET_HOST/assets/vitalis/run2-fixture.html"
         private const val LOCAL_RUN3_TEST_URL =
             "https://$LOCAL_ASSET_HOST/assets/vitalis/run3-health-fixture.html"
+        private const val LOCAL_RUN4_TEST_URL =
+            "https://$LOCAL_ASSET_HOST/assets/vitalis/run4-nutrition-fixture.html"
         private const val VITALIS_HOST = "vitalis-health-os.gillesarnaudasse65.chatgpt.site"
         private const val VITALIS_URL = "https://$VITALIS_HOST/"
         private const val COACH_ASSET_PATH = "/__vitalis/coaches/"
@@ -2212,9 +2771,6 @@ class MainActivity : ComponentActivity() {
         private const val MAX_SPEECH_TEXT_LENGTH = 8_000
         private const val MAX_AI_PROMPT_LENGTH = 4_000
         private const val MAX_DEVELOPER_PROMPT_LENGTH = 8_000
-        private const val MAX_IMAGE_DATA_URL_LENGTH = 6_000_000
-        private const val MAX_MEAL_ESTIMATE_JSON_LENGTH = 24_000
-        private const val MAX_MANUAL_MEALS = 500
         private const val OPENAI_RESPONSES_URL = "https://api.openai.com/v1/responses"
         private const val OPENAI_MODEL = "gpt-5.6"
         private const val CHATGPT_WORK_URL = "https://chatgpt.com/codex"
@@ -2224,6 +2780,9 @@ class MainActivity : ComponentActivity() {
         private const val OPENAI_DEVELOPER_SECRET_NAME = "openai_developer_api_key"
         private const val AI_HEALTH_CONSENT = "ai_health_consent"
         private const val MANUAL_MEALS_KEY = "manual_meal_estimates"
+        private const val PENDING_NUTRITION_SCAN_KEY = "pending_nutrition_scan_v1"
+        private const val STATE_NUTRITION_CAMERA_FILE = "nutrition_camera_file"
+        private const val STATE_NUTRITION_CAMERA_URI = "nutrition_camera_uri"
         private const val ANDROID_KEYSTORE = "AndroidKeyStore"
         private const val KEYSTORE_ALIAS = "vitalis_openai_key_v1"
         private const val KEYSTORE_TRANSFORMATION = "AES/GCM/NoPadding"
@@ -2232,6 +2791,17 @@ class MainActivity : ComponentActivity() {
                 "indique les données manquantes et cite les connecteurs visibles. Ne pose aucun diagnostic et ne remplace " +
                 "jamais un professionnel de santé. Pour un symptôme grave ou urgent, recommande immédiatement de contacter " +
                 "les services d’urgence locaux. Donne au maximum trois priorités réalistes et explique brièvement pourquoi."
+        private const val NUTRITION_ANALYSIS_PROMPT =
+            "Analyse uniquement la photo du repas jointe. Réponds avec un unique objet JSON, sans markdown, " +
+                "contenant foodItems (tableau d’objets name, portion, estimatedCalories, confidence), mealName, " +
+                "portionDescription, caloriesKcal, carbohydratesG, proteinG, fatG, fibreG, sugarG, sodiumMg, " +
+                "confidence entre 0 et 1 et uncertaintyNotes. Utilise null lorsqu’une valeur ne peut pas être " +
+                "raisonnablement estimée, n’invente pas de précision et signale les incertitudes."
+        private const val RUN4_MOCK_ANALYSIS =
+            "{\"foodItems\":[{\"name\":\"Bol de légumes et céréales\",\"portion\":\"1 bol\",\"estimatedCalories\":520,\"confidence\":0.71}]," +
+                "\"mealName\":\"Bol végétal\",\"portionDescription\":\"1 bol moyen\",\"caloriesKcal\":520," +
+                "\"carbohydratesG\":62,\"proteinG\":21,\"fatG\":19,\"fibreG\":13,\"sugarG\":9," +
+                "\"sodiumMg\":640,\"confidence\":0.71,\"uncertaintyNotes\":\"La sauce et les quantités exactes restent à vérifier.\"}"
         private const val DEVELOPER_INSTRUCTIONS =
             "Tu es Vitalis Developer AI, assistant technique senior de l’application Vitalis Mobile. Aide l’utilisateur " +
                 "à transformer un besoin en demande de modification structurée : objectif, comportement attendu, fichiers " +

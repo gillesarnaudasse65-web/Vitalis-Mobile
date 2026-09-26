@@ -85,53 +85,11 @@
   }
 
   function scanMeal() {
-    var input = document.createElement("input");
-    input.type = "file";
-    input.accept = "image/*";
-    input.setAttribute("capture", "environment");
-    input.style.display = "none";
-    input.onchange = function () {
-      var file = input.files && input.files[0];
-      if (!file) { input.remove(); return; }
-      var entry = record("meal", "Repas photographié", file.name || "Photo du repas");
-      var reader = new FileReader();
-      reader.onload = function () {
-        function complete(preview) {
-          var detail = {
-            entry: entry,
-            fileName: file.name,
-            mimeType: "image/jpeg",
-            size: file.size,
-            preview: preview
-          };
-          window.dispatchEvent(new CustomEvent("vitalis-meal-photo-selected", { detail: detail }));
-          document.dispatchEvent(new CustomEvent("vitalis-meal-photo-selected", { detail: detail }));
-          if (window.VitalisAI && window.VitalisAI.analyzeMeal) {
-            window.VitalisAI.analyzeMeal(detail.preview, entry);
-          }
-          toast("Photo du repas enregistrée.");
-          input.remove();
-        }
-        var image = new Image();
-        image.onload = function () {
-          var scale = Math.min(1, 1280 / Math.max(image.width, image.height));
-          var canvas = document.createElement("canvas");
-          canvas.width = Math.max(1, Math.round(image.width * scale));
-          canvas.height = Math.max(1, Math.round(image.height * scale));
-          canvas.getContext("2d").drawImage(image, 0, 0, canvas.width, canvas.height);
-          complete(canvas.toDataURL("image/jpeg", 0.82));
-        };
-        image.onerror = function () { complete(reader.result); };
-        image.src = reader.result;
-      };
-      reader.onerror = function () {
-        toast("Photo enregistrée, aperçu indisponible.");
-        input.remove();
-      };
-      reader.readAsDataURL(file);
-    };
-    document.body.appendChild(input);
-    input.click();
+    if (window.VitalisNutrition && window.VitalisNutrition.startScan) {
+      window.VitalisNutrition.startScan();
+      return;
+    }
+    toast("Le scanner nutrition sécurisé nécessite l’application Android Vitalis.");
   }
 
   function logActivity() {
