@@ -1511,7 +1511,7 @@ class MainActivity : ComponentActivity() {
             dispatchNutritionScanState(it)
         }
         normalizedNutritionImages.remove(scanId)
-        readHealthData(session.selectedDate)
+        readHealthData(selectedHealthDate)
         return nutritionResult(true, null).apply {
             put("meal", NutritionMealCodec.encode(record))
             put("created", existing == null)
@@ -1542,16 +1542,15 @@ class MainActivity : ComponentActivity() {
             source = existing.source
         )
         val result = nutritionMealStore.upsert(updated)
-        if (result.success) readHealthData(updated.date)
+        if (result.success) readHealthData(selectedHealthDate)
         return nutritionResult(result.success, result.errorCode).apply {
             if (result.success) put("meal", NutritionMealCodec.encode(updated))
         }
     }
 
     private fun deleteLocalNutritionMealInternal(mealId: String): JSONObject {
-        val existing = nutritionMealStore.list().value?.firstOrNull { it.id == mealId }
         val result = nutritionMealStore.delete(mealId)
-        if (result.value == true) readHealthData(existing?.date ?: selectedHealthDate)
+        if (result.value == true) readHealthData(selectedHealthDate)
         return nutritionResult(result.success, result.errorCode).apply {
             put("deleted", result.value == true)
         }
