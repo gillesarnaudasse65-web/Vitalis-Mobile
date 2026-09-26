@@ -78,6 +78,7 @@ import java.security.KeyStore
 import java.time.Duration
 import java.time.Instant
 import java.time.LocalDate
+import java.time.Clock
 import java.time.ZoneId
 import java.util.Locale
 import javax.crypto.Cipher
@@ -102,7 +103,11 @@ class MainActivity : ComponentActivity() {
     private var textToSpeechReady = false
     private var speechRecognizer: SpeechRecognizer? = null
     private var microphoneEnabled = false
-    private var selectedHealthDate: LocalDate = LocalDate.now()
+    private lateinit var dateState: SelectedDateState
+    private var selectedHealthDate: LocalDate
+        get() = dateState.selected
+        set(value) { dateState.select(value.toString()) }
+    private val debugRefreshRequests = java.util.Collections.synchronizedList(mutableListOf<String>())
     private var pendingConnectorId: String? = null
     private var refreshAfterConnectorReturn = false
     private var bridgeRegistered = false
@@ -172,6 +177,15 @@ class MainActivity : ComponentActivity() {
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        val deviceClock = if (BuildConfig.DEBUG && intent.getBooleanExtra(EXTRA_RUN2_FIXTURE, false)) {
+            val fixed = BridgeInputPolicy.date(intent.getStringExtra(EXTRA_TEST_TODAY_ISO))
+            fixed?.let { Clock.fixed(it.atStartOfDay(java.time.ZoneId.systemDefault()).toInstant(),
+                java.time.ZoneId.systemDefault()) } ?: Clock.systemDefaultZone()
+        } else Clock.systemDefaultZone()
+        val preferences = getSharedPreferences(APP_PREFS, MODE_PRIVATE)
+        dateState = SelectedDateState(deviceClock, preferences.getString(SELECTED_HEALTH_DATE_KEY, null)) {
+            preferences.edit().putString(SELECTED_HEALTH_DATE_KEY, it).apply()
+        }
         window.statusBarColor = Color.parseColor("#063C30")
         window.navigationBarColor = Color.parseColor("#063C30")
 
@@ -317,13 +331,17 @@ class MainActivity : ComponentActivity() {
                 }
             }
             // Controlled offline start for the debug instrumentation smoke test only.
-            loadUrl(if (BuildConfig.DEBUG && intent.getBooleanExtra(EXTRA_FORCE_OFFLINE_FOR_TESTS, false))
-                LOCAL_URL else VITALIS_URL)
+            loadUrl(when {
+                BuildConfig.DEBUG && intent.getBooleanExtra(EXTRA_RUN2_FIXTURE, false) -> LOCAL_TEST_URL
+                BuildConfig.DEBUG && intent.getBooleanExtra(EXTRA_FORCE_OFFLINE_FOR_TESTS, false) -> LOCAL_URL
+                else -> VITALIS_URL
+            })
         }
         root.addView(webView, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
         setContentView(root)
 
-        if (!(BuildConfig.DEBUG && intent.getBooleanExtra(EXTRA_FORCE_OFFLINE_FOR_TESTS, false)))
+        if (!(BuildConfig.DEBUG && (intent.getBooleanExtra(EXTRA_FORCE_OFFLINE_FOR_TESTS, false) ||
+                    intent.getBooleanExtra(EXTRA_RUN2_FIXTURE, false))))
             scheduleClassicInterfaceTimeout()
 
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
@@ -334,6 +352,12 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun requestHost(url: String): String? = runCatching { Uri.parse(url).host }.getOrNull()
+
+    internal fun debugRecordedDates(): List<String> = synchronized(debugRefreshRequests) {
+        debugRefreshRequests.toList()
+    }
+
+    internal fun clearDebugRecordedDates() { debugRefreshRequests.clear() }
 
     private fun registerTrustedBridge(view: WebView) {
         if (!bridgeRegistered) {
@@ -356,7 +380,8 @@ class MainActivity : ComponentActivity() {
 
     private fun injectClassicCompatibility(view: WebView) {
         val script = runCatching {
-            listOf("vitalis/compat.js", "vitalis/vitalis-3.12.js").joinToString("\n;\n") { asset ->
+            listOf("vitalis/selected-date.js", "vitalis/compat.js", "vitalis/vitalis-3.12.js")
+                .joinToString("\n;\n") { asset ->
                 assets.open(asset).bufferedReader().use { it.readText() }
             }
         }.getOrNull() ?: return
@@ -469,6 +494,12 @@ class MainActivity : ComponentActivity() {
             }
             readHealthData(requestedDate)
         }
+
+        @JavascriptInterface fun getSelectedHealthDate(): String = selectedHealthDate.toString()
+
+        @JavascriptInterface fun getTodayHealthDate(): String = dateState.currentToday().toString()
+
+        @JavascriptInterface fun selectHealthDate(dateIso: String): Boolean = dateState.select(dateIso)
 
         @JavascriptInterface
         fun getConnectorStatus(): String = buildConnectorPayload(lastSourcePackages).toString()
@@ -1265,8 +1296,16 @@ class MainActivity : ComponentActivity() {
         dispatchSyncState(syncStatus)
     }
 
-    private fun readHealthData(selectedDate: LocalDate = LocalDate.now()) {
+    private fun readHealthData(selectedDate: LocalDate = selectedHealthDate) {
         selectedHealthDate = selectedDate
+        if (BuildConfig.DEBUG && intent.getBooleanExtra(EXTRA_RUN2_FIXTURE, false)) {
+            debugRefreshRequests.add(selectedDate.toString())
+            val payload = JSONObject().put("selectedDate", selectedDate.toString())
+            lastHealthPayload = payload
+            dispatchHealthData(payload)
+            dispatchSyncState("complete")
+            return
+        }
         val client = healthConnectClient
         if (client == null) {
             dispatchManualOnlyHealthData(selectedDate, "unavailable")
@@ -1799,8 +1838,12 @@ class MainActivity : ComponentActivity() {
 
     companion object {
         internal const val EXTRA_FORCE_OFFLINE_FOR_TESTS = "com.vitalis.healthos.FORCE_OFFLINE_TEST"
+        internal const val EXTRA_RUN2_FIXTURE = "com.vitalis.healthos.RUN2_FIXTURE"
+        internal const val EXTRA_TEST_TODAY_ISO = "com.vitalis.healthos.TEST_TODAY_ISO"
+        private const val SELECTED_HEALTH_DATE_KEY = "selected_health_date_iso"
         private const val LOCAL_ASSET_HOST = "appassets.androidplatform.net"
         private const val LOCAL_URL = "https://$LOCAL_ASSET_HOST/assets/vitalis/index.html"
+        private const val LOCAL_TEST_URL = "https://$LOCAL_ASSET_HOST/assets/vitalis/run2-fixture.html"
         private const val VITALIS_HOST = "vitalis-health-os.gillesarnaudasse65.chatgpt.site"
         private const val VITALIS_URL = "https://$VITALIS_HOST/"
         private const val COACH_ASSET_PATH = "/__vitalis/coaches/"
