@@ -50,7 +50,7 @@ The new flow is:
 10. The response is strictly parsed into `NutritionEstimate` and sent for review.
 11. The user edits every supported nutrient before save.
 12. Native code revalidates the edited structure and upserts stable `meal-$scanId`.
-13. Health/nutrition totals refresh for the session’s captured date.
+13. The meal keeps the session’s captured date while the currently visible date refreshes without being changed.
 14. Saved meals support view, edit, delete, JSON export and scoped delete-all.
 
 The legacy `analyzeMealImage` entry point rejects image data and directs callers to the secure flow. No original image or normalized image is written to persistent meal storage.
@@ -126,7 +126,11 @@ Import/restore is **not implemented in Run 4**. Safe import needs file-size/sche
 - `Run4NutritionWebViewTest`: production injected scripts, fixed historical date, synthetic image, mocked analysis, editable review, later date change, idempotent repeated save, activity recreation, edit and delete.
 - `BridgeInputPolicyTest`: new 32 kB JSON boundary and normalized-base64 character/size checks.
 
-The workflow adds a nutrition-specific isolated JVM gate before the full rerun, retains all Run 1–3 tests, and runs all instrumentation on API 35. CI outcomes and artifact URLs are recorded in the completion report after the stacked PR run completes.
+The workflow adds a nutrition-specific isolated JVM gate before the full rerun, retains all Run 1–3 tests, and runs all instrumentation on API 35.
+
+Final validation run `36278580916` (workflow run 74) completed successfully on the Run 4 head. It passed wrapper validation, JDK/Gradle initialization, 20 JavaScript tests, 12 isolated Health Connect tests, 15 isolated nutrition tests, all 41 JVM tests, lint, `assembleDebug`, `assembleDebugAndroidTest`, and all four API 35 connected tests. Lint reports 0 errors and 32 warnings, versus 0 errors and 33 warnings on the final Run 3 baseline; Run 4 adds no lint warning. The synthetic nutrition instrumentation verifies captured historical date, a later visible-date change, normalization, mock analysis, review edit, stable repeated save, activity recreation, persisted edit and delete.
+
+Artifacts are retained for 90 days: `Vitalis-unit-lint-reports` (ID `10917703621`), `Vitalis-debug-apks` (ID `10918076795`) and `Vitalis-instrumentation-reports` (ID `10918440809`). Release APK, AAB and signing remain out of scope.
 
 ## 14. Physical-device matrix
 
