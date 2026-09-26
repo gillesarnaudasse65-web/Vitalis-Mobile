@@ -532,3 +532,7 @@ External references explain platform behavior; every finding about Vitalis itsel
 ## Dated appendix — 2026-09-26, Run 1 foundation
 
 The Run 0 audit remains a point-in-time record of the initial commit. Run 1 is tracked in [`VITALIS_RUN1_BUILD_TEST_FOUNDATION.md`](VITALIS_RUN1_BUILD_TEST_FOUNDATION.md). It adds the official pinned Gradle wrapper, CI quality gates and tests, plus minimum WebView navigation and bridge-input guardrails. The confirmed coach, date, Health Connect, scanner and voice defects remain open. The native bridge still lacks per-frame caller-origin isolation and the API key still enters through the remote DOM. Run 1 CI outcomes must be read from its new workflow run; the historical build success above does not validate these changes.
+
+## Dated appendix — 2026-09-26, Run 2 coach and date corrections
+
+Run 2 is documented in [`VITALIS_RUN2_COACH_DATE_WEBVIEW.md`](VITALIS_RUN2_COACH_DATE_WEBVIEW.md). It reproduces the old coach capture and today-refresh defects before fixing them, then tests the same injected scripts with an approved local WebView fixture. The original Run 0 findings remain historical evidence; Health Connect, scanner, voice, OAuth, deletion/export and security residuals remain open. Run 2 PR #7 is stacked on Run 1 PR #6 while #6 remains unmerged.
