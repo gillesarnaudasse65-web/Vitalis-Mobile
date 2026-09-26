@@ -179,6 +179,13 @@ class Run2WebViewTest {
     }
 
     private fun tap(scenario: ActivityScenario<MainActivity>, selector: String, background: Boolean = false) {
+        // A fresh Google APIs emulator can briefly place a launcher ANR window above the app.
+        // Wait for our actual window before injecting a UID-targeted touch; do not mask a lost focus.
+        await(scenario, 20_000) {
+            var focused = false
+            scenario.onActivity { focused = it.window.decorView.hasWindowFocus() }
+            focused
+        }
         val expression = "(function(){var e=document.querySelector(${JSONObject.quote(selector)});" +
             "if(!e)return '';e.scrollIntoView({block:'center'});var r=e.getBoundingClientRect();" +
             "return JSON.stringify({x:r.left+${if (background) "8" else "r.width/2"}," +
