@@ -36,8 +36,10 @@ jobs:
         run: node --test --test-reporter=spec --test-reporter-destination=stdout --test-reporter=junit --test-reporter-destination=run2-js.xml scripts/test-*.cjs
       - name: Clean
         run: ./gradlew --no-daemon clean
+      - name: Health Connect JVM tests (isolated)
+        run: ./gradlew --no-daemon testDebugUnitTest --tests com.vitalis.healthos.HealthConnectReliabilityTest
       - name: Android unit tests
-        run: ./gradlew --no-daemon testDebugUnitTest
+        run: ./gradlew --no-daemon testDebugUnitTest --rerun-tasks
       - name: Android lint
         run: ./gradlew --no-daemon lintDebug
       - name: Assemble debug APK and instrumentation package

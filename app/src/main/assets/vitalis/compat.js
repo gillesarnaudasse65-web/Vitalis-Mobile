@@ -373,6 +373,15 @@
     ];
   }
 
+  function metricDisplay(data, key, formatter) {
+    var metric = data && data.metrics && data.metrics[key];
+    if (!metric || metric.status === "DATA") return formatter(data && data[key]);
+    if (metric.status === "NO_DATA") return "Aucune donnée";
+    if (metric.status === "NOT_AUTHORIZED") return "Non autorisé";
+    if (metric.status === "UNSUPPORTED") return "Non pris en charge";
+    return "Erreur";
+  }
+
   function showSourceReport() {
     installStyles();
     var old = document.querySelector(".vitalis-source-overlay");
@@ -384,7 +393,7 @@
       var contributors = source.contributors || [];
       return '<div class="vitalis-source-row"><div class="vitalis-source-top"><b>' +
         escapeHtml(title) + '</b><span class="vitalis-source-value">' +
-        escapeHtml(formatter(lastData[key])) + '</span></div><div class="vitalis-source-meta">Dernière source : <b>' +
+        escapeHtml(metricDisplay(lastData, key, formatter)) + '</span></div><div class="vitalis-source-meta">Dernière source : <b>' +
         escapeHtml(source.lastConnector || "Aucune source") + '</b><br>Dernière donnée : ' +
         escapeHtml(formatDate(source.lastRecordAt)) + '<br>Contributeurs : ' +
         escapeHtml(contributors.length ? contributors.join(", ") : "Aucun") + '</div></div>';
@@ -744,6 +753,15 @@
     return Math.floor(value / 60) + "h " + String(Math.round(value % 60)).padStart(2, "0");
   }
 
+  function metricDisplay(data, key, formatter) {
+    var metric = data && data.metrics && data.metrics[key];
+    if (!metric || metric.status === "DATA") return formatter(data && data[key]);
+    if (metric.status === "NO_DATA") return "Aucune donnée";
+    if (metric.status === "NOT_AUTHORIZED") return "Non autorisé";
+    if (metric.status === "UNSUPPORTED") return "Non pris en charge";
+    return "Erreur";
+  }
+
   function setMetric(selector, value) {
     var card = document.querySelector(selector);
     var strong = card && card.querySelector("strong");
@@ -752,14 +770,14 @@
 
   function updateVisibleMetrics() {
     var d = currentData || {};
-    setMetric('[aria-label="Voir le détail : Pas"]', Number(d.steps || 0).toLocaleString("fr-FR"));
-    setMetric('[aria-label="Voir le détail : Activité"]', Math.round(Number(d.exerciseMinutes || 0)));
-    setMetric('[aria-label="Voir le détail : Calories"]', Math.round(Number(d.activeCalories || 0)).toLocaleString("fr-FR"));
-    setMetric('[aria-label="Voir le détail : Sommeil"]', formatSleep(d.sleepMinutes));
-    setMetric('[aria-label="Voir le détail : Fréquence cardiaque"]', d.averageHeartRate == null ? "—" : Math.round(d.averageHeartRate));
-    setMetric('[aria-label="Voir le détail : Oxygène sanguin"]', d.oxygenPercent == null ? "—" : Number(d.oxygenPercent).toFixed(0) + "%");
-    setMetric('[aria-label="Voir le détail : Hydratation"]', Number(d.hydrationLitres || 0).toFixed(2) + " L");
-    setMetric('[aria-label="Voir le détail : Composition"]', d.weightKg == null ? "—" : Number(d.weightKg).toFixed(1) + " kg");
+    setMetric('[aria-label="Voir le détail : Pas"]', metricDisplay(d, "steps", function(v){return Number(v).toLocaleString("fr-FR");}));
+    setMetric('[aria-label="Voir le détail : Activité"]', metricDisplay(d, "exerciseMinutes", function(v){return Math.round(Number(v));}));
+    setMetric('[aria-label="Voir le détail : Calories"]', metricDisplay(d, "activeCalories", function(v){return Math.round(Number(v)).toLocaleString("fr-FR");}));
+    setMetric('[aria-label="Voir le détail : Sommeil"]', metricDisplay(d, "sleepMinutes", formatSleep));
+    setMetric('[aria-label="Voir le détail : Fréquence cardiaque"]', metricDisplay(d, "averageHeartRate", function(v){return Math.round(Number(v));}));
+    setMetric('[aria-label="Voir le détail : Oxygène sanguin"]', metricDisplay(d, "oxygenPercent", function(v){return Number(v).toFixed(0) + "%";}));
+    setMetric('[aria-label="Voir le détail : Hydratation"]', metricDisplay(d, "hydrationLitres", function(v){return Number(v).toFixed(2) + " L";}));
+    setMetric('[aria-label="Voir le détail : Composition"]', metricDisplay(d, "weightKg", function(v){return Number(v).toFixed(1) + " kg";}));
   }
 
   function nutritionMarkup() {
@@ -960,6 +978,14 @@
     var data = healthData();
     var q = String(question || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
     var advice = ["Analyse locale Vitalis — disponible sans connexion IA."];
+    function value(key, formatter) {
+      var metric = data.metrics && data.metrics[key];
+      if (!metric || metric.status === "DATA") return formatter(data[key]);
+      if (metric.status === "NO_DATA") return "aucune donnée";
+      if (metric.status === "NOT_AUTHORIZED") return "non autorisé";
+      if (metric.status === "UNSUPPORTED") return "non pris en charge";
+      return "erreur de lecture";
+    }
     if (!data.syncedAt) {
       advice.push("Aucune synchronisation récente : appuyez sur Actualiser pour améliorer l’analyse.");
     }
@@ -969,24 +995,24 @@
       advice.push("Glucides " + Math.round(Number(nutrition.carbohydratesGrams || 0)) + " g • protéines " + Math.round(Number(nutrition.proteinGrams || 0)) + " g • lipides " + Math.round(Number(nutrition.fatGrams || 0)) + " g • fibres " + Math.round(Number(nutrition.fiberGrams || 0)) + " g.");
       advice.push("Source nutrition : " + sourceFor(data, "nutrition") + ". Priorité : complétez les repas manquants et privilégiez une assiette équilibrée.");
     } else if (/sommeil|dormir|fatigue/.test(q)) {
-      var sleepHours = Number(data.sleepMinutes || 0) / 60;
-      advice.push("Sommeil : " + sleepHours.toFixed(1) + " h sur les dernières 24 h. Source : " + sourceFor(data, "sleepMinutes") + ".");
-      advice.push(sleepHours && sleepHours < 7 ? "Priorité : avancez progressivement l’heure du coucher et réduisez les écrans avant le sommeil." : "Priorité : conservez des horaires réguliers et observez la qualité du réveil.");
+      var sleepHours = data.sleepMinutes == null ? null : Number(data.sleepMinutes) / 60;
+      advice.push("Sommeil : " + value("sleepMinutes", function(v){return (Number(v)/60).toFixed(1) + " h";}) + " sur le jour sélectionné. Source : " + sourceFor(data, "sleepMinutes") + ".");
+      advice.push(sleepHours != null && sleepHours < 7 ? "Priorité : avancez progressivement l’heure du coucher et réduisez les écrans avant le sommeil." : "Priorité : conservez des horaires réguliers et observez la qualité du réveil.");
     } else if (/activite|sport|entrainement|pas|marche/.test(q)) {
-      advice.push("Activité : " + Math.round(Number(data.steps || 0)) + " pas et " + Math.round(Number(data.exerciseMinutes || 0)) + " minutes. Source : " + sourceFor(data, "exerciseMinutes") + ".");
-      advice.push(Number(data.exerciseMinutes || 0) < 30 ? "Priorité : ajoutez 15 à 30 minutes d’activité adaptée aujourd’hui." : "Priorité : maintenez la régularité et prévoyez une récupération adaptée.");
+      advice.push("Activité : " + value("steps", function(v){return Math.round(Number(v)) + " pas";}) + " et " + value("exerciseMinutes", function(v){return Math.round(Number(v)) + " minutes";}) + ". Source : " + sourceFor(data, "exerciseMinutes") + ".");
+      advice.push(data.exerciseMinutes != null && Number(data.exerciseMinutes) < 30 ? "Priorité : ajoutez 15 à 30 minutes d’activité adaptée aujourd’hui." : "Priorité : maintenez la régularité et prévoyez une récupération adaptée.");
     } else if (/hydrat|eau/.test(q)) {
-      advice.push("Hydratation : " + Number(data.hydrationLitres || 0).toFixed(2) + " L. Source : " + sourceFor(data, "hydrationLitres") + ".");
+      advice.push("Hydratation : " + value("hydrationLitres", function(v){return Number(v).toFixed(2) + " L";}) + ". Source : " + sourceFor(data, "hydrationLitres") + ".");
       advice.push("Priorité : répartissez l’eau sur la journée et ajustez selon la chaleur et l’activité.");
     } else if (/recuper|coeur|cardiaque|stress/.test(q)) {
-      advice.push("Récupération : fréquence cardiaque moyenne " + (data.averageHeartRate == null ? "non disponible" : Math.round(data.averageHeartRate) + " bpm") + ". Source : " + sourceFor(data, "averageHeartRate") + ".");
+      advice.push("Récupération : fréquence cardiaque moyenne " + value("averageHeartRate", function(v){return Math.round(Number(v)) + " bpm";}) + ". Source : " + sourceFor(data, "averageHeartRate") + ".");
       advice.push("Priorité : privilégiez sommeil, hydratation et récupération douce. Une valeur inhabituelle persistante doit être discutée avec un professionnel de santé.");
     } else if (/score|bilan|rapport|sante|conseil/.test(q)) {
       advice.push("Score Vitalis : " + Number(data.score || 0) + "/100.");
-      advice.push("Activité : " + Math.round(Number(data.steps || 0)) + " pas • sommeil : " + (Number(data.sleepMinutes || 0)/60).toFixed(1) + " h • hydratation : " + Number(data.hydrationLitres || 0).toFixed(1) + " L.");
+      advice.push("Activité : " + value("steps", function(v){return Math.round(Number(v)) + " pas";}) + " • sommeil : " + value("sleepMinutes", function(v){return (Number(v)/60).toFixed(1) + " h";}) + " • hydratation : " + value("hydrationLitres", function(v){return Number(v).toFixed(1) + " L";}) + ".");
       advice.push("Priorité : améliorez d’abord la catégorie la moins renseignée ou la plus éloignée de son objectif.");
     } else {
-      advice.push("Activité : " + Math.round(Number(data.steps || 0)) + " pas • sommeil : " + (Number(data.sleepMinutes || 0)/60).toFixed(1) + " h • hydratation : " + Number(data.hydrationLitres || 0).toFixed(1) + " L.");
+      advice.push("Activité : " + value("steps", function(v){return Math.round(Number(v)) + " pas";}) + " • sommeil : " + value("sleepMinutes", function(v){return (Number(v)/60).toFixed(1) + " h";}) + " • hydratation : " + value("hydrationLitres", function(v){return Number(v).toFixed(1) + " L";}) + ".");
       advice.push("Priorité : choisissez une action mesurable aujourd’hui, puis actualisez les données pour suivre le résultat.");
     }
     advice.push("Ces conseils sont informatifs et ne constituent pas un diagnostic médical.");
