@@ -184,13 +184,16 @@ jobs:
             adb install "$RUNNER_TEMP/vitalis-run5-baseline/app/build/outputs/apk/debug/app-debug.apk"
             adb install "$RUNNER_TEMP/vitalis-run5-baseline/app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk"
             adb shell am instrument -w -e class 'com.vitalis.healthos.Run6UpgradeContinuityTest#a_seedPreRun6Data' com.vitalis.healthos.test/androidx.test.runner.AndroidJUnitRunner > upgrade-seed.txt
-            grep -q 'OK (1 test)' upgrade-seed.txt
             adb install -r app/build/outputs/apk/debug/app-debug.apk
             adb install -r app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
             adb shell am instrument -w -e class 'com.vitalis.healthos.Run6UpgradeContinuityTest#b_verifyRun6UpgradePreservesData' com.vitalis.healthos.test/androidx.test.runner.AndroidJUnitRunner > upgrade-verify.txt
-            grep -q 'OK (1 test)' upgrade-verify.txt
             cat upgrade-seed.txt upgrade-verify.txt > upgrade-continuity.txt
+            grep -q 'OK (1 test)' upgrade-seed.txt
+            grep -q 'OK (1 test)' upgrade-verify.txt
             ./gradlew --no-daemon connectedDebugAndroidTest
+            mkdir -p ux-screenshots
+            adb pull /sdcard/Pictures/VitalisFinalUX/. ux-screenshots/
+            adb pull /sdcard/Download/VitalisFinalUX/performance.json ux-screenshots/
             VITALIS_USE_DEBUG_RELEASE_SIGNING=true ./gradlew --no-daemon assembleRelease
             adb install -r app/build/outputs/apk/release/app-release.apk
             adb shell am start -W -n com.vitalis.healthos/.MainActivity > release-smoke.txt
@@ -206,5 +209,8 @@ jobs:
             app/build/outputs/androidTest-results/
             release-smoke.txt
             upgrade-continuity.txt
+            upgrade-seed.txt
+            upgrade-verify.txt
+            ux-screenshots/
           if-no-files-found: warn
           retention-days: 90
