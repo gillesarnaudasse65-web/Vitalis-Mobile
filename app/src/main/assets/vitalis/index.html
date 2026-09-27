@@ -85,7 +85,7 @@ nav{position:fixed;z-index:30;left:10px;right:10px;bottom:calc(8px + env(safe-ar
  var key="vitalis-offline-v1";
  var defaults={profile:{name:"Gilles",stepGoal:8000,waterGoal:2.5,sleepGoal:8},health:{steps:0,sleepMinutes:null,averageHeartRate:null,hydrationLitres:0,distanceKm:null,activeCalories:null,oxygenPercent:null,weightKg:null,sources:[],syncedAt:null},entries:[]};
  var state=load();
- var connectors=["Samsung Health","Mibro Fit","Google Fit","Fitbit","Garmin","Huawei Health","Strava","Oura","WHOOP","Withings","FitOn","Fitify","FitCoach","FlexMe","Welmi"];
+ var connectors=[];
  function load(){try{var v=JSON.parse(localStorage.getItem(key));return Object.assign({},defaults,v,{profile:Object.assign({},defaults.profile,v&&v.profile),health:Object.assign({},defaults.health,v&&v.health),entries:v&&v.entries||[]});}catch(e){return JSON.parse(JSON.stringify(defaults));}}
  function save(){localStorage.setItem(key,JSON.stringify(state));}
  function fmtDate(v){return new Intl.DateTimeFormat("fr-FR",{day:"2-digit",month:"short",hour:"2-digit",minute:"2-digit"}).format(new Date(v));}
@@ -145,7 +145,7 @@ nav{position:fixed;z-index:30;left:10px;right:10px;bottom:calc(8px + env(safe-ar
  function renderSources(){
   var active=state.health.sources||[];
   document.getElementById("sourceSummary").textContent=active.length?active.length+" source(s) détectée(s)":"Health Connect";
-  document.getElementById("sourceList").innerHTML=connectors.map(function(name){var hit=active.some(function(x){return x.toLowerCase().indexOf(name.split(" ")[0].toLowerCase())>=0});return '<div class="source-card"><div class="source-icon">⌁</div><div class="source-copy"><b>'+name+'</b><small>'+(hit?"Données détectées via Health Connect":"Disponible si le fournisseur partage les données")+'</small></div><span class="tag '+(hit?"":"pending")+'">'+(hit?"Connecté":"À autoriser")+'</span></div>';}).join("");
+  document.getElementById("sourceList").innerHTML=connectors.length?connectors.map(function(item){var detected=item.runtimeState==="HEALTH_CONNECT_DATA_AVAILABLE";return '<div class="source-card"><div class="source-icon">⌁</div><div class="source-copy"><b>'+esc(item.name||item.packageName)+'</b><small>'+esc(item.note||"")+'</small></div><span class="tag '+(detected?"":"pending")+'">'+esc(item.userFacingStatus||"À configurer")+'</span></div>';}).join(""):'<div class="source-card"><div class="source-icon">⌁</div><div class="source-copy"><b>Health Connect</b><small>Actualisez les données pour charger le catalogue natif et ses états vérifiés.</small></div><span class="tag pending">À vérifier</span></div>';
  }
  function openModal(type){
   var titles={meal:"Scanner un repas",activity:"Enregistrer une activité",water:"Ajouter de l’eau",measure:"Ajouter une mesure"};document.getElementById("modalTitle").textContent=titles[type];var body="";
@@ -177,7 +177,7 @@ nav{position:fixed;z-index:30;left:10px;right:10px;bottom:calc(8px + env(safe-ar
  document.getElementById("saveProfile").onclick=function(){state.profile={name:document.getElementById("profileName").value||"Gilles",stepGoal:Number(document.getElementById("stepGoal").value)||8000,waterGoal:Number(document.getElementById("waterGoal").value)||2.5,sleepGoal:Number(document.getElementById("sleepGoal").value)||8};save();render();alert("Profil enregistré.");};
  document.getElementById("clearData").onclick=function(){if(confirm("Effacer toutes les saisies locales ?")){state.entries=[];save();render();}};
  window.addEventListener("vitalis-health-data",function(e){state.health=Object.assign(state.health,e.detail||{});save();render();});
- window.addEventListener("vitalis-connectors",function(e){if(e.detail&&e.detail.sourcePackages)state.health.sources=e.detail.sourcePackages;save();renderSources();});
+ window.addEventListener("vitalis-connectors",function(e){if(e.detail&&e.detail.sourcePackages)state.health.sources=e.detail.sourcePackages;if(e.detail&&e.detail.connectors)connectors=e.detail.connectors;save();renderSources();});
  window.addEventListener("vitalis-health-connect",function(e){if(e.detail&&e.detail.message)alert(e.detail.message);});
  function online(){var on=navigator.onLine;document.getElementById("offlineBanner").classList.toggle("hidden",on);document.getElementById("connectionStatus").textContent=on?"En ligne • local prêt":"Hors ligne prêt";}
  addEventListener("online",online);addEventListener("offline",online);online();render();

@@ -43,6 +43,10 @@ jobs:
         run: ./gradlew --no-daemon testDebugUnitTest --tests com.vitalis.healthos.HealthConnectReliabilityTest
       - name: Nutrition reliability JVM tests (isolated)
         run: ./gradlew --no-daemon testDebugUnitTest --tests com.vitalis.healthos.NutritionReliabilityTest
+      - name: Voice reliability JVM tests (isolated)
+        run: ./gradlew --no-daemon testDebugUnitTest --tests com.vitalis.healthos.VoiceReliabilityTest
+      - name: Connector truthfulness JVM tests (isolated)
+        run: ./gradlew --no-daemon testDebugUnitTest --tests com.vitalis.healthos.ConnectorCatalogTest
       - name: Android unit tests
         run: ./gradlew --no-daemon testDebugUnitTest --rerun-tasks
       - name: Android lint

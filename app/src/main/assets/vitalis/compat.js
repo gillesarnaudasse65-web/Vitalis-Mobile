@@ -864,18 +864,28 @@
   function overlay(body) {
     styles();
     var old = document.querySelector(".vitalis-ai-overlay");
-    if (old) old.remove();
+    if (old) { stopOverlayVoice(); old.remove(); }
     var root = document.createElement("div");
     root.className = "vitalis-ai-overlay";
     root.innerHTML = '<div class="vitalis-ai-sheet">' + body + "</div>";
     document.body.appendChild(root);
     root.addEventListener("click", function (event) {
-      if (event.target === root) root.remove();
+      if (event.target === root) { stopOverlayVoice(); root.remove(); }
     });
     var close = root.querySelector("[data-ai-close]");
-    if (close) close.onclick = function () { root.remove(); };
+    if (close) close.onclick = function () { stopOverlayVoice(); root.remove(); };
     return root;
   }
+
+  function stopOverlayVoice() {
+    if (bridge && bridge.stopVoiceInput) bridge.stopVoiceInput();
+    if (bridge && bridge.stopSpeaking) bridge.stopSpeaking();
+  }
+
+  window.addEventListener("pagehide", stopOverlayVoice);
+  document.addEventListener("visibilitychange", function () {
+    if (document.visibilityState === "hidden") stopOverlayVoice();
+  });
 
   function setup() {
     var root = overlay(
@@ -1118,7 +1128,7 @@
 
   window.addEventListener("vitalis-voice-input", function (event) {
     var detail = event.detail || {};
-    if (detail.partial || !detail.text) return;
+    if (detail.kind !== "FINAL" || !detail.text) return;
     var root = document.querySelector(".vitalis-ai-overlay");
     var input = root && root.__vitalisAiInput;
     if (input) {
