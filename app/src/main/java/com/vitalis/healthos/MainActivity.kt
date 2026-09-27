@@ -20,12 +20,8 @@ import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
-import android.security.keystore.KeyGenParameterSpec
-import android.security.keystore.KeyProperties
-import android.util.Base64
 import android.view.Gravity
 import android.view.ViewGroup
-import android.webkit.JavascriptInterface
 import android.webkit.ValueCallback
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceError
@@ -62,7 +58,11 @@ import androidx.health.connect.client.records.StepsRecord
 import androidx.health.connect.client.records.WeightRecord
 import androidx.health.connect.client.time.TimeRangeFilter
 import androidx.lifecycle.lifecycleScope
+import androidx.webkit.JavaScriptReplyProxy
+import androidx.webkit.WebMessageCompat
 import androidx.webkit.WebViewAssetLoader
+import androidx.webkit.WebViewCompat
+import androidx.webkit.WebViewFeature
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
@@ -74,7 +74,6 @@ import java.io.InputStreamReader
 import java.net.HttpURLConnection
 import java.net.URL
 import java.nio.charset.StandardCharsets
-import java.security.KeyStore
 import java.time.Duration
 import java.time.Instant
 import java.time.LocalDate
@@ -83,11 +82,8 @@ import androidx.core.content.edit
 import java.time.ZoneId
 import java.util.Locale
 import java.util.UUID
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicLong
-import javax.crypto.Cipher
-import javax.crypto.KeyGenerator
-import javax.crypto.SecretKey
-import javax.crypto.spec.GCMParameterSpec
 import kotlin.math.roundToInt
 
 class MainActivity : ComponentActivity() {
@@ -121,8 +117,13 @@ class MainActivity : ComponentActivity() {
     private val debugRefreshRequests = java.util.Collections.synchronizedList(mutableListOf<String>())
     private var pendingConnectorId: String? = null
     private var refreshAfterConnectorReturn = false
-    private var bridgeRegistered = false
     private lateinit var appPreferences: SharedPreferences
+    private lateinit var secureSecretStore: SecureSecretStore
+    private lateinit var localDataStore: VitalisLocalDataStore
+    private lateinit var aiConsentCoordinator: AiConsentCoordinator
+    private val activeHealthAiJobs = ConcurrentHashMap<String, Job>()
+    private var observedLocalDeleteGeneration = 0L
+    private var observedLocalImportGeneration = 0L
     private lateinit var nutritionImageProcessor: SafeNutritionImageProcessor
     private lateinit var nutritionMealStore: NutritionMealStore
     private val nutritionScanCoordinator = NutritionScanCoordinator()
@@ -265,7 +266,8 @@ class MainActivity : ComponentActivity() {
             intent.getBooleanExtra(EXTRA_RUN2_FIXTURE, false) ||
                 intent.getBooleanExtra(EXTRA_RUN3_FIXTURE, false) ||
                 intent.getBooleanExtra(EXTRA_RUN4_FIXTURE, false) ||
-                intent.getBooleanExtra(EXTRA_RUN5_FIXTURE, false)
+                intent.getBooleanExtra(EXTRA_RUN5_FIXTURE, false) ||
+                intent.getBooleanExtra(EXTRA_RUN6_FIXTURE, false)
             )
         val deviceClock = if (debugFixture) {
             val fixed = BridgeInputPolicy.date(intent.getStringExtra(EXTRA_TEST_TODAY_ISO))
@@ -273,6 +275,13 @@ class MainActivity : ComponentActivity() {
                 java.time.ZoneId.systemDefault()) } ?: Clock.systemDefaultZone()
         } else Clock.systemDefaultZone()
         appPreferences = getSharedPreferences(APP_PREFS, MODE_PRIVATE)
+        secureSecretStore = SecureSecretStore(this)
+        localDataStore = VitalisLocalDataStore(this)
+        aiConsentCoordinator = AiConsentCoordinator(
+            appPreferences.getBoolean(AI_HEALTH_CONSENT, false)
+        )
+        observedLocalDeleteGeneration = localDataStore.localDeleteGeneration()
+        observedLocalImportGeneration = localDataStore.appliedImportGeneration()
         nutritionImageProcessor = SafeNutritionImageProcessor(this)
         nutritionMealStore = NutritionMealStore(object : NutritionStringStorage {
             override fun read(): String? = appPreferences.getString(MANUAL_MEALS_KEY, "[]")
@@ -327,11 +336,10 @@ class MainActivity : ComponentActivity() {
             settings.setSupportMultipleWindows(false)
             settings.javaScriptCanOpenWindowsAutomatically = false
             settings.userAgentString = settings.userAgentString + " VitalisAndroid/3.14"
-            WebView.setWebContentsDebuggingEnabled(BuildConfig.DEBUG)
-            // The bridge is exposed to every frame by Android, even when the top-level URL is
-            // trusted. NavigationPolicy guards top-level loads; full per-frame isolation remains
-            // a separate security task. Never register this object for an unrelated page.
-            registerTrustedBridge(this)
+            WebView.setWebContentsDebuggingEnabled(
+                ReleaseSecurityPolicy.webViewDebuggingEnabled(BuildConfig.DEBUG)
+            )
+            registerOriginAwareBridge(this)
             webChromeClient = object : WebChromeClient() {
                 override fun onCreateWindow(
                     view: WebView?, isDialog: Boolean, isUserGesture: Boolean,
@@ -392,17 +400,14 @@ class MainActivity : ComponentActivity() {
 
                 override fun onPageStarted(view: WebView, url: String, favicon: Bitmap?) {
                     if (!NavigationPolicy.isTrusted(url)) {
-                        unregisterTrustedBridge(view)
                         view.stopLoading()
                         loadOfflineFallback()
                         return
                     }
-                    registerTrustedBridge(view)
                 }
 
                 override fun onReceivedSslError(view: WebView, handler: SslErrorHandler, error: SslError) {
                     handler.cancel()
-                    unregisterTrustedBridge(view)
                     loadOfflineFallback()
                 }
 
@@ -449,6 +454,8 @@ class MainActivity : ComponentActivity() {
                     LOCAL_RUN4_TEST_URL
                 BuildConfig.DEBUG && intent.getBooleanExtra(EXTRA_RUN5_FIXTURE, false) ->
                     LOCAL_RUN5_TEST_URL
+                BuildConfig.DEBUG && intent.getBooleanExtra(EXTRA_RUN6_FIXTURE, false) ->
+                    LOCAL_RUN6_TEST_URL
                 BuildConfig.DEBUG && intent.getBooleanExtra(EXTRA_FORCE_OFFLINE_FOR_TESTS, false) -> LOCAL_URL
                 else -> VITALIS_URL
             })
@@ -460,7 +467,8 @@ class MainActivity : ComponentActivity() {
                     intent.getBooleanExtra(EXTRA_RUN2_FIXTURE, false) ||
                     intent.getBooleanExtra(EXTRA_RUN3_FIXTURE, false) ||
                     intent.getBooleanExtra(EXTRA_RUN4_FIXTURE, false) ||
-                    intent.getBooleanExtra(EXTRA_RUN5_FIXTURE, false))))
+                    intent.getBooleanExtra(EXTRA_RUN5_FIXTURE, false) ||
+                    intent.getBooleanExtra(EXTRA_RUN6_FIXTURE, false))))
             scheduleClassicInterfaceTimeout()
 
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
@@ -478,17 +486,25 @@ class MainActivity : ComponentActivity() {
 
     internal fun clearDebugRecordedDates() { debugRefreshRequests.clear() }
 
-    private fun registerTrustedBridge(view: WebView) {
-        if (!bridgeRegistered) {
-            view.addJavascriptInterface(VitalisAndroidBridge(), "VitalisAndroid")
-            bridgeRegistered = true
-        }
+    private fun registerOriginAwareBridge(view: WebView) {
+        if (!WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER)) return
+        WebViewCompat.addWebMessageListener(
+            view,
+            NATIVE_CHANNEL_NAME,
+            OriginBridgePolicy.allowedOriginRules(),
+            VitalisWebMessageListener()
+        )
     }
 
-    private fun unregisterTrustedBridge(view: WebView) {
-        if (bridgeRegistered) {
-            view.removeJavascriptInterface("VitalisAndroid")
-            bridgeRegistered = false
+    private inner class VitalisWebMessageListener : WebViewCompat.WebMessageListener {
+        override fun onPostMessage(
+            view: WebView,
+            message: WebMessageCompat,
+            sourceOrigin: Uri,
+            isMainFrame: Boolean,
+            replyProxy: JavaScriptReplyProxy
+        ) {
+            handleOriginAwareMessage(message.data, sourceOrigin.toString(), isMainFrame, replyProxy)
         }
     }
 
@@ -501,15 +517,42 @@ class MainActivity : ComponentActivity() {
         val script = runCatching {
             listOf("vitalis/selected-date.js", "vitalis/compat.js", "vitalis/vitalis-3.12.js")
                 .joinToString("\n;\n") { asset ->
-                assets.open(asset).bufferedReader().use { it.readText() }
-            }
+                    assets.open(asset).bufferedReader().use { it.readText() }
+                }
         }.getOrNull() ?: return
-        view.evaluateJavascript(script, null)
+        view.evaluateJavascript(buildNativeProxyBootstrap() + "\n;\n" + script, null)
     }
 
     override fun onResume() {
         super.onResume()
         ensureHealthConnectClient()
+        if (::localDataStore.isInitialized) {
+            val persistedConsent = appPreferences.getBoolean(AI_HEALTH_CONSENT, false)
+            if (persistedConsent != aiConsentCoordinator.isConsented()) {
+                if (persistedConsent) aiConsentCoordinator.grant()
+                else revokeAiConsent("consent_revoked_in_settings")
+            }
+            val deleteGeneration = localDataStore.localDeleteGeneration()
+            if (deleteGeneration != observedLocalDeleteGeneration) {
+                observedLocalDeleteGeneration = deleteGeneration
+                revokeAiConsent("local_data_deleted")
+                stopMicrophone("local_data_deleted", cancelled = true)
+                stopSpeaking("local_data_deleted")
+                selectedHealthDate = dateState.currentToday()
+                readHealthData(selectedHealthDate)
+            }
+            val importGeneration = localDataStore.localImportGeneration()
+            if (importGeneration != observedLocalImportGeneration) {
+                applyImportedLocalStateToWeb(importGeneration)
+                appPreferences.getString(SELECTED_HEALTH_DATE_KEY, null)?.let { selected ->
+                    BridgeInputPolicy.date(selected)?.let {
+                        selectedHealthDate = it
+                        readHealthData(it)
+                    }
+                }
+            }
+            refreshNativeProxyState()
+        }
         if (refreshAfterConnectorReturn && ::webView.isInitialized) {
             refreshAfterConnectorReturn = false
             Handler(Looper.getMainLooper()).postDelayed(
@@ -604,260 +647,262 @@ class MainActivity : ComponentActivity() {
         })
     }
 
-    inner class VitalisAndroidBridge {
-        @JavascriptInterface fun isNativeApp(): Boolean = true
-        @JavascriptInterface fun getPlatform(): String = "android"
-
-        @JavascriptInterface
-        fun requestHealthConnectPermissions() {
-            runOnUiThread {
-                when (HealthConnectClient.getSdkStatus(this@MainActivity)) {
-                    HealthConnectClient.SDK_AVAILABLE -> permissionLauncher.launch(healthPermissions)
-                    HealthConnectClient.SDK_UNAVAILABLE_PROVIDER_UPDATE_REQUIRED -> {
-                        notifyWeb(false, "update_required", "Health Connect doit être installé ou mis à jour.")
-                        openHealthConnectStore()
-                    }
-                    else -> notifyWeb(false, "unavailable", "Health Connect n’est pas disponible sur cet appareil.")
-                }
-            }
+    private fun handleOriginAwareMessage(
+        raw: String?,
+        sourceOrigin: String,
+        isMainFrame: Boolean,
+        replyProxy: JavaScriptReplyProxy
+    ) {
+        val message = raw?.takeIf { it.length <= MAX_BRIDGE_MESSAGE_CHARS }
+            ?.let { runCatching { JSONObject(it) }.getOrNull() }
+        val id = message?.optString("id")?.takeIf(BridgeInputPolicy::requestId)
+        val method = message?.optString("method").orEmpty()
+        val args = message?.optJSONArray("args") ?: JSONArray()
+        if (id == null || !OriginBridgePolicy.canInvoke(sourceOrigin.trimEnd('/'), isMainFrame, method)) {
+            replyProxy.postMessage(bridgeReply(id, false, null, "untrusted_or_invalid_request").toString())
+            return
         }
-
-        @JavascriptInterface
-        fun refreshHealthData() {
-            readHealthData()
-        }
-
-        @JavascriptInterface
-        fun refreshHealthDataForDate(dateIso: String) {
-            val requestedDate = BridgeInputPolicy.date(dateIso)
-            if (requestedDate == null) {
-                dispatchSyncState("error", "Date invalide : $dateIso")
-                return
-            }
-            readHealthData(requestedDate)
-        }
-
-        @JavascriptInterface fun getSelectedHealthDate(): String = selectedHealthDate.toString()
-
-        @JavascriptInterface fun getTodayHealthDate(): String = dateState.currentToday().toString()
-
-        @JavascriptInterface fun selectHealthDate(dateIso: String): Boolean = dateState.select(dateIso)
-
-        @JavascriptInterface
-        fun getConnectorStatus(): String = buildConnectorPayload(lastSourcePackages).toString()
-
-        @JavascriptInterface
-        fun getRun5FixtureResult(): String =
-            if (isRun5Fixture()) buildRun5FixtureResult().toString() else "{}"
-
-        @JavascriptInterface
-        fun authorizeConnector(connectorId: String) {
-            runOnUiThread { handleConnectorAuthorization(connectorId.trim()) }
-        }
-
-        @JavascriptInterface
-        fun getLastHealthData(): String = lastHealthPayload.toString()
-
-        @JavascriptInterface
-        fun hasOpenAiKey(): Boolean = readOpenAiKey() != null
-
-        @JavascriptInterface
-        fun saveOpenAiKey(apiKey: String): Boolean {
-            val cleanKey = apiKey.trim()
-            if (!BridgeInputPolicy.apiKey(cleanKey)) return false
-            return runCatching {
-                writeEncryptedSecret(OPENAI_SECRET_NAME, cleanKey)
-                true
-            }.getOrDefault(false)
-        }
-
-        @JavascriptInterface
-        fun clearOpenAiKey() {
-            getSharedPreferences(SECURE_PREFS, MODE_PRIVATE)
-                .edit()
-                .remove(OPENAI_SECRET_NAME)
-                .apply()
-        }
-
-        @JavascriptInterface
-        fun hasDeveloperAiKey(): Boolean = readDeveloperOpenAiKey() != null
-
-        @JavascriptInterface
-        fun saveDeveloperAiKey(apiKey: String): Boolean {
-            val cleanKey = apiKey.trim()
-            if (!BridgeInputPolicy.apiKey(cleanKey)) return false
-            return runCatching {
-                writeEncryptedSecret(OPENAI_DEVELOPER_SECRET_NAME, cleanKey)
-                true
-            }.getOrDefault(false)
-        }
-
-        @JavascriptInterface
-        fun clearDeveloperAiKey() {
-            getSharedPreferences(SECURE_PREFS, MODE_PRIVATE)
-                .edit()
-                .remove(OPENAI_DEVELOPER_SECRET_NAME)
-                .apply()
-        }
-
-        @JavascriptInterface
-        fun hasAiHealthConsent(): Boolean =
-            getSharedPreferences(APP_PREFS, MODE_PRIVATE).getBoolean(AI_HEALTH_CONSENT, false)
-
-        @JavascriptInterface
-        fun setAiHealthConsent(consented: Boolean) {
-            getSharedPreferences(APP_PREFS, MODE_PRIVATE)
-                .edit()
-                .putBoolean(AI_HEALTH_CONSENT, consented)
-                .apply()
-            if (!consented) invalidateActiveNutritionAnalysis("consent_revoked")
-        }
-
-        @JavascriptInterface
-        fun askKofi(prompt: String, requestId: String) {
-            requestCoach(prompt, "general", requestId, null)
-        }
-
-        @JavascriptInterface
-        fun askCoach(prompt: String, coachId: String, requestId: String) {
-            requestCoach(prompt, coachId, requestId, null)
-        }
-
-        @JavascriptInterface
-        fun askDeveloper(prompt: String, requestId: String) {
-            requestDeveloper(prompt, requestId)
-        }
-
-        @JavascriptInterface
-        fun analyzeMealImage(imageDataUrl: String, requestId: String) {
-            if (BridgeInputPolicy.requestId(requestId)) dispatchAiResponse(
-                requestId,
-                false,
-                "",
-                "Utilisez le sélecteur nutrition sécurisé de Vitalis.",
-                "nutrition"
+        runOnUiThread {
+            val result = runCatching { executeBridgeMethod(method, args) }
+            replyProxy.postMessage(
+                if (result.isSuccess) bridgeReply(id, true, result.getOrNull(), null).toString()
+                else bridgeReply(id, false, null, "operation_failed").toString()
             )
+            refreshNativeProxyState()
         }
+    }
 
-        @JavascriptInterface
-        fun saveMealEstimate(estimateJson: String): Boolean =
-            saveLegacyMealEstimate(estimateJson)
-
-        @JavascriptInterface
-        fun beginNutritionScan(scanId: String, selectedDateIso: String, source: String): Boolean =
-            beginNutritionScanInternal(scanId, selectedDateIso, source)
-
-        @JavascriptInterface
-        fun cancelNutritionScan(scanId: String) {
-            cancelNutritionScanInternal(scanId, "user_cancelled")
-        }
-
-        @JavascriptInterface
-        fun analyzeMealSession(scanId: String, requestId: String) {
-            analyzeNutritionSession(scanId, requestId)
-        }
-
-        @JavascriptInterface
-        fun saveNutritionMeal(scanId: String, estimateJson: String): String =
-            saveNutritionMealInternal(scanId, estimateJson).toString()
-
-        @JavascriptInterface
-        fun getPendingNutritionScan(): String =
-            nutritionScanCoordinator.active()?.let(::nutritionScanSessionJson)?.toString() ?: "null"
-
-        @JavascriptInterface
-        fun getLocalNutritionMeals(dateIso: String?): String =
-            localNutritionMealsPayload(dateIso).toString()
-
-        @JavascriptInterface
-        fun updateLocalNutritionMeal(mealJson: String): String =
-            updateLocalNutritionMealInternal(mealJson).toString()
-
-        @JavascriptInterface
-        fun deleteLocalNutritionMeal(mealId: String): String =
-            deleteLocalNutritionMealInternal(mealId).toString()
-
-        @JavascriptInterface
-        fun exportLocalNutrition(): Boolean = exportLocalNutritionInternal()
-
-        @JavascriptInterface
-        fun deleteAllLocalNutritionData(): Boolean = deleteAllLocalNutritionDataInternal()
-
-        @JavascriptInterface
-        fun sendDeveloperRequestToChatGpt(request: String) {
-            val cleanRequest = request.trim().take(MAX_DEVELOPER_PROMPT_LENGTH)
-            if (cleanRequest.isEmpty()) return
-            runOnUiThread {
-                val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                clipboard.setPrimaryClip(ClipData.newPlainText("Demande Vitalis", cleanRequest))
-                runCatching {
-                    startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(CHATGPT_WORK_URL)))
-                }
+    private fun executeBridgeMethod(method: String, args: JSONArray): Any? = when (method) {
+        "requestHealthConnectPermissions" -> requestHealthConnectPermissionsFromUser()
+        "refreshHealthData" -> readHealthData().let { true }
+        "refreshHealthDataForDate" -> {
+            val date = BridgeInputPolicy.date(args.optString(0)) ?: run {
+                dispatchSyncState("error", "Date invalide")
+                return false
             }
+            readHealthData(date)
+            true
+        }
+        "selectHealthDate" -> dateState.select(args.optString(0))
+        "authorizeConnector" -> handleConnectorAuthorization(args.optString(0).trim()).let { true }
+        "askKofi" -> requestCoach(args.optString(0), "general", args.optString(1), null).let { true }
+        "askCoach" -> requestCoach(args.optString(0), args.optString(1), args.optString(2), null).let { true }
+        "askDeveloper" -> requestDeveloper(args.optString(0), args.optString(1)).let { true }
+        "analyzeMealImage" -> {
+            val requestId = args.optString(1)
+            if (BridgeInputPolicy.requestId(requestId)) dispatchAiResponse(
+                requestId, false, "", "Utilisez le sélecteur nutrition sécurisé de Vitalis.", "nutrition"
+            )
+            false
+        }
+        "saveMealEstimate" -> saveLegacyMealEstimate(args.optString(0))
+        "beginNutritionScan" -> beginNutritionScanInternal(
+            args.optString(0), args.optString(1), args.optString(2)
+        )
+        "cancelNutritionScan" -> cancelNutritionScanInternal(
+            args.optString(0), "user_cancelled"
+        ).let { true }
+        "analyzeMealSession" -> analyzeNutritionSession(args.optString(0), args.optString(1)).let { true }
+        "saveNutritionMeal" -> saveNutritionMealInternal(args.optString(0), args.optString(1))
+        "updateLocalNutritionMeal" -> updateLocalNutritionMealInternal(args.optString(0))
+        "deleteLocalNutritionMeal" -> deleteLocalNutritionMealInternal(args.optString(0))
+        "exportLocalNutrition" -> exportLocalNutritionInternal()
+        "deleteAllLocalNutritionData" -> deleteAllLocalNutritionDataInternal()
+        "sendDeveloperRequestToChatGpt" -> sendDeveloperRequestToChatGpt(args.optString(0))
+        "speakText" -> speakStable(args.optString(0), args.optString(1).ifBlank { null }).let { true }
+        "stopSpeaking" -> stopSpeaking("user_stop").let { true }
+        "setMicrophoneEnabled" -> {
+            if (args.optBoolean(0)) startMicrophone() else stopMicrophone("user_stop", cancelled = true)
+            true
+        }
+        "startVoiceInput" -> startMicrophone().let { true }
+        "stopVoiceInput" -> stopMicrophone("user_stop", cancelled = true).let { true }
+        "openOfflineMode" -> loadOfflineFallback().let { true }
+        "openClassicInterface" -> openClassicInterface().let { true }
+        "openHealthConnectSettings" -> openHealthConnectSettings().let { true }
+        "openExternalUrl" -> openSafeExternalUrl(args.optString(0)).let { true }
+        "openPrivacyDataSettings" -> startActivity(
+            Intent(this, PrivacyDataActivity::class.java)
+        ).let { true }
+        "openKeySettings" -> startActivity(
+            Intent(this, KeySettingsActivity::class.java)
+                .putExtra(KeySettingsActivity.EXTRA_KEY_KIND, args.optString(0))
+        ).let { true }
+        "setAiHealthConsent" -> setAiConsent(args.optBoolean(0)).let { true }
+        "syncWebLocalData" -> localDataStore.syncWebLocalData(args.optString(0))
+        else -> false
+    }
+
+    private fun bridgeReply(id: String?, ok: Boolean, value: Any?, error: String?) =
+        JSONObject().apply {
+            put("id", id ?: JSONObject.NULL)
+            put("ok", ok)
+            put("value", value ?: JSONObject.NULL)
+            put("error", error ?: JSONObject.NULL)
         }
 
-        @JavascriptInterface
-        fun speakText(text: String, language: String?) {
-            runOnUiThread { speakStable(text, language) }
-        }
-
-        @JavascriptInterface
-        fun stopSpeaking() {
-            runOnUiThread { this@MainActivity.stopSpeaking("user_stop") }
-        }
-
-        @JavascriptInterface
-        fun isSpeaking(): Boolean = textToSpeech?.isSpeaking == true
-
-        @JavascriptInterface
-        fun setMicrophoneEnabled(enabled: Boolean) {
-            runOnUiThread {
-                if (enabled) startMicrophone()
-                else stopMicrophone("user_stop", cancelled = true)
+    private fun requestHealthConnectPermissionsFromUser() {
+        when (HealthConnectClient.getSdkStatus(this)) {
+            HealthConnectClient.SDK_AVAILABLE -> permissionLauncher.launch(healthPermissions)
+            HealthConnectClient.SDK_UNAVAILABLE_PROVIDER_UPDATE_REQUIRED -> {
+                notifyWeb(false, "update_required", "Health Connect doit être installé ou mis à jour.")
+                openHealthConnectStore()
             }
+            else -> notifyWeb(false, "unavailable", "Health Connect n’est pas disponible sur cet appareil.")
         }
+    }
 
-        @JavascriptInterface
-        fun isMicrophoneEnabled(): Boolean = microphoneEnabled
+    private fun sendDeveloperRequestToChatGpt(request: String) {
+        val cleanRequest = request.trim().take(MAX_DEVELOPER_PROMPT_LENGTH)
+        if (cleanRequest.isEmpty()) return
+        val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        clipboard.setPrimaryClip(ClipData.newPlainText("Demande Vitalis", cleanRequest))
+        runCatching { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(CHATGPT_WORK_URL))) }
+    }
 
-        @JavascriptInterface
-        fun startVoiceInput() {
-            runOnUiThread { startMicrophone() }
+    private fun openClassicInterface() {
+        fallbackLoaded = false
+        remotePageFinished = false
+        remoteRetryCount = 0
+        loading.visibility = android.view.View.VISIBLE
+        webView.loadUrl(VITALIS_URL)
+        scheduleClassicInterfaceTimeout()
+    }
+
+    private fun openHealthConnectSettings() {
+        try { startActivity(Intent(HealthConnectClient.ACTION_HEALTH_CONNECT_SETTINGS)) }
+        catch (_: ActivityNotFoundException) { openHealthConnectStore() }
+    }
+
+    private fun nativeProxyState(): JSONObject = JSONObject().apply {
+        put("selectedHealthDate", selectedHealthDate.toString())
+        put("todayHealthDate", dateState.currentToday().toString())
+        put("connectorStatus", buildConnectorPayload(lastSourcePackages))
+        put("lastHealthData", lastHealthPayload)
+        put("healthAiConfigured", secureSecretStore.status(AiKeyKind.HEALTH).configured)
+        put("developerAiConfigured", secureSecretStore.status(AiKeyKind.DEVELOPER).configured)
+        put("aiHealthConsent", hasAiHealthConsentInternal())
+        put("pendingNutritionScan", nutritionScanCoordinator.active()?.let(::nutritionScanSessionJson) ?: JSONObject.NULL)
+        put("localNutrition", localNutritionMealsPayload(null))
+        put("microphoneEnabled", microphoneEnabled)
+        put("speaking", textToSpeech?.isSpeaking == true)
+        put("run5Fixture", if (isRun5Fixture()) buildRun5FixtureResult() else JSONObject())
+        put("run6Fixture", if (isRun6Fixture()) buildRun6FixtureResult() else JSONObject())
+    }
+
+    private fun buildNativeProxyBootstrap(): String {
+        val state = nativeProxyState().toString()
+        return """
+            (function(){
+              var channel=window.$NATIVE_CHANNEL_NAME;
+              if(!channel||typeof channel.postMessage!=="function"){window.VitalisAndroid=null;return;}
+              var state=$state;
+              var sequence=0;
+              function call(method,args){
+                var id="bridge-"+(++sequence)+"-"+Date.now();
+                channel.postMessage(JSON.stringify({id:id,method:method,args:args||[]}));
+                return id;
+              }
+              channel.onmessage=function(event){
+                var detail;try{detail=JSON.parse(event.data)}catch(_){return;}
+                window.dispatchEvent(new CustomEvent("vitalis-native-result",{detail:detail}));
+              };
+              function json(value){return JSON.stringify(value===undefined?null:value);}
+              function pending(){return json({ok:true,pending:true});}
+              var api={
+                isNativeApp:function(){return true},getPlatform:function(){return "android"},
+                getSelectedHealthDate:function(){return state.selectedHealthDate},
+                getTodayHealthDate:function(){return state.todayHealthDate},
+                selectHealthDate:function(v){state.selectedHealthDate=v;call("selectHealthDate",[v]);return true},
+                getConnectorStatus:function(){return json(state.connectorStatus)},
+                getLastHealthData:function(){return json(state.lastHealthData)},
+                getRun5FixtureResult:function(){return json(state.run5Fixture)},
+                getRun6FixtureResult:function(){return json(state.run6Fixture)},
+                hasOpenAiKey:function(){return !!state.healthAiConfigured},
+                hasDeveloperAiKey:function(){return !!state.developerAiConfigured},
+                hasAiHealthConsent:function(){return !!state.aiHealthConsent},
+                getAiConfigurationStatus:function(){return json({healthConfigured:!!state.healthAiConfigured,developerConfigured:!!state.developerAiConfigured,consented:!!state.aiHealthConsent})},
+                setAiHealthConsent:function(v){state.aiHealthConsent=!!v;call("setAiHealthConsent",[!!v]);return true},
+                openKeySettings:function(kind){call("openKeySettings",[kind||"health"]);return true},
+                openPrivacyDataSettings:function(){call("openPrivacyDataSettings",[]);return true},
+                requestHealthConnectPermissions:function(){call("requestHealthConnectPermissions",[])},
+                refreshHealthData:function(){call("refreshHealthData",[])},
+                refreshHealthDataForDate:function(v){call("refreshHealthDataForDate",[v])},
+                authorizeConnector:function(v){call("authorizeConnector",[v])},
+                askKofi:function(p,r){call("askKofi",[p,r])},
+                askCoach:function(p,c,r){call("askCoach",[p,c,r])},
+                askDeveloper:function(p,r){call("askDeveloper",[p,r])},
+                analyzeMealImage:function(i,r){call("analyzeMealImage",[i,r])},
+                saveMealEstimate:function(v){call("saveMealEstimate",[v]);return true},
+                beginNutritionScan:function(s,d,o){call("beginNutritionScan",[s,d,o]);return true},
+                cancelNutritionScan:function(s){call("cancelNutritionScan",[s])},
+                analyzeMealSession:function(s,r){call("analyzeMealSession",[s,r])},
+                saveNutritionMeal:function(s,v){call("saveNutritionMeal",[s,v]);return pending()},
+                getPendingNutritionScan:function(){return json(state.pendingNutritionScan)},
+                getLocalNutritionMeals:function(){return json(state.localNutrition)},
+                updateLocalNutritionMeal:function(v){call("updateLocalNutritionMeal",[v]);return pending()},
+                deleteLocalNutritionMeal:function(v){call("deleteLocalNutritionMeal",[v]);return pending()},
+                exportLocalNutrition:function(){call("exportLocalNutrition",[]);return true},
+                deleteAllLocalNutritionData:function(){call("deleteAllLocalNutritionData",[]);return true},
+                sendDeveloperRequestToChatGpt:function(v){call("sendDeveloperRequestToChatGpt",[v])},
+                speakText:function(v,l){call("speakText",[v,l||""])},
+                stopSpeaking:function(){call("stopSpeaking",[])},
+                isSpeaking:function(){return !!state.speaking},
+                setMicrophoneEnabled:function(v){state.microphoneEnabled=!!v;call("setMicrophoneEnabled",[!!v])},
+                isMicrophoneEnabled:function(){return !!state.microphoneEnabled},
+                startVoiceInput:function(){state.microphoneEnabled=true;call("startVoiceInput",[])},
+                stopVoiceInput:function(){state.microphoneEnabled=false;call("stopVoiceInput",[])},
+                openOfflineMode:function(){call("openOfflineMode",[])},
+                openClassicInterface:function(){call("openClassicInterface",[])},
+                openHealthConnectSettings:function(){call("openHealthConnectSettings",[])},
+                openExternalUrl:function(v){call("openExternalUrl",[v])},
+                syncWebLocalData:function(v){call("syncWebLocalData",[v]);return true}
+              };
+              window.__vitalisNativeState=state;
+              window.__vitalisUpdateNativeState=function(next){Object.keys(next||{}).forEach(function(k){state[k]=next[k]})};
+              window.VitalisAndroid=Object.freeze(api);
+              function sync(){
+                try{api.syncWebLocalData(JSON.stringify({
+                  selectedCoach:localStorage.getItem("vitalis-selected-coach-v312")||null,
+                  dashboardSettings:JSON.parse(localStorage.getItem("vitalis-offline-v1")||"null"),
+                  localJournal:JSON.parse(localStorage.getItem("vitalis-native-journal-v1")||"[]")
+                }))}catch(_){}
+              }
+              sync();window.addEventListener("pagehide",sync);window.addEventListener("vitalis-local-state-changed",sync);
+              window.dispatchEvent(new CustomEvent("vitalis-origin-bridge-ready",{detail:{origin:location.origin}}));
+            })();
+        """.trimIndent()
+    }
+
+    private fun refreshNativeProxyState() {
+        if (!::webView.isInitialized) return
+        val state = nativeProxyState()
+        webView.evaluateJavascript("window.__vitalisUpdateNativeState&&window.__vitalisUpdateNativeState($state);", null)
+    }
+
+    private fun applyImportedLocalStateToWeb(generation: Long) {
+        if (!::webView.isInitialized) return
+        val snapshot = localDataStore.snapshot()
+        val payload = JSONObject().apply {
+            put("selectedCoach", snapshot.selectedCoach ?: JSONObject.NULL)
+            put("dashboardSettings", snapshot.dashboardSettings ?: JSONObject.NULL)
+            put("localJournal", snapshot.localJournal)
         }
-
-        @JavascriptInterface
-        fun stopVoiceInput() {
-            runOnUiThread { stopMicrophone("user_stop", cancelled = true) }
-        }
-
-        @JavascriptInterface
-        fun openOfflineMode() {
-            runOnUiThread { loadOfflineFallback() }
-        }
-
-        @JavascriptInterface
-        fun openClassicInterface() {
-            runOnUiThread {
-                fallbackLoaded = false
-                remotePageFinished = false
-                remoteRetryCount = 0
-                loading.visibility = android.view.View.VISIBLE
-                webView.loadUrl(VITALIS_URL)
-                scheduleClassicInterfaceTimeout()
-            }
-        }
-
-        @JavascriptInterface
-        fun openHealthConnectSettings() {
-            runOnUiThread {
-                try { startActivity(Intent(HealthConnectClient.ACTION_HEALTH_CONNECT_SETTINGS)) }
-                catch (_: ActivityNotFoundException) { openHealthConnectStore() }
-            }
-        }
-
-        @JavascriptInterface
-        fun openExternalUrl(url: String) {
-            runOnUiThread { openSafeExternalUrl(url) }
+        webView.evaluateJavascript(
+            """
+                (function(data){
+                  if(data.selectedCoach===null)localStorage.removeItem('vitalis-selected-coach-v312');
+                  else localStorage.setItem('vitalis-selected-coach-v312',data.selectedCoach);
+                  if(data.dashboardSettings===null)localStorage.removeItem('vitalis-offline-v1');
+                  else localStorage.setItem('vitalis-offline-v1',JSON.stringify(data.dashboardSettings));
+                  localStorage.setItem('vitalis-native-journal-v1',JSON.stringify(data.localJournal||[]));
+                  window.dispatchEvent(new CustomEvent('vitalis-local-state-changed'));
+                  location.reload();
+                })($payload);
+            """.trimIndent(),
+        ) {
+            localDataStore.markImportApplied(generation)
+            observedLocalImportGeneration = generation
         }
     }
 
@@ -1135,9 +1180,8 @@ class MainActivity : ComponentActivity() {
             dispatchAiResponse(requestId, false, "", "Clé OpenAI non configurée.", coachId)
             return
         }
-        val consented = getSharedPreferences(APP_PREFS, MODE_PRIVATE)
-            .getBoolean(AI_HEALTH_CONSENT, false)
-        if (!consented) {
+        val consentToken = aiConsentCoordinator.begin()
+        if (consentToken == null) {
             dispatchAiResponse(
                 requestId,
                 false,
@@ -1147,15 +1191,18 @@ class MainActivity : ComponentActivity() {
             )
             return
         }
-        requestAi(
+        val job = requestAi(
             apiKey = apiKey,
             instructions = coachInstructions(coachId),
             prompt = cleanPrompt,
             requestId = requestId,
             imageDataUrl = imageDataUrl,
             agentId = coachId,
-            includeHealthContext = true
+            includeHealthContext = true,
+            responseGuard = { aiConsentCoordinator.accepts(consentToken) }
         )
+        activeHealthAiJobs[requestId] = job
+        job.invokeOnCompletion { activeHealthAiJobs.remove(requestId, job) }
     }
 
     private fun requestDeveloper(prompt: String, requestId: String) {
@@ -1337,15 +1384,10 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun readOpenAiKey(): String? =
-        runCatching { readEncryptedSecret(OPENAI_SECRET_NAME) }
-            .getOrNull()
-            ?.takeIf { it.startsWith("sk-") && it.length >= 30 }
+    private fun readOpenAiKey(): String? = secureSecretStore.readForRequest(AiKeyKind.HEALTH)
 
     private fun readDeveloperOpenAiKey(): String? =
-        runCatching { readEncryptedSecret(OPENAI_DEVELOPER_SECRET_NAME) }
-            .getOrNull()
-            ?.takeIf { it.startsWith("sk-") && it.length >= 30 }
+        secureSecretStore.readForRequest(AiKeyKind.DEVELOPER)
 
     private fun coachInstructions(coachId: String): String {
         val identity = when (coachId.trim().lowercase(Locale.ROOT)) {
@@ -1357,44 +1399,6 @@ class MainActivity : ComponentActivity() {
             else -> "Tu es Kofi, coach santé global. Fais la synthèse des données Vitalis et priorise les actions à plus fort impact."
         }
         return "$identity $COACH_SAFETY_INSTRUCTIONS"
-    }
-
-    private fun writeEncryptedSecret(name: String, value: String) {
-        val cipher = Cipher.getInstance(KEYSTORE_TRANSFORMATION)
-        cipher.init(Cipher.ENCRYPT_MODE, getOrCreateSecretKey())
-        val encrypted = cipher.doFinal(value.toByteArray(StandardCharsets.UTF_8))
-        val encoded = Base64.encodeToString(cipher.iv, Base64.NO_WRAP) + ":" +
-            Base64.encodeToString(encrypted, Base64.NO_WRAP)
-        getSharedPreferences(SECURE_PREFS, MODE_PRIVATE).edit().putString(name, encoded).apply()
-    }
-
-    private fun readEncryptedSecret(name: String): String? {
-        val encoded = getSharedPreferences(SECURE_PREFS, MODE_PRIVATE).getString(name, null) ?: return null
-        val separator = encoded.indexOf(':')
-        if (separator <= 0 || separator >= encoded.lastIndex) return null
-        val iv = Base64.decode(encoded.substring(0, separator), Base64.NO_WRAP)
-        val encrypted = Base64.decode(encoded.substring(separator + 1), Base64.NO_WRAP)
-        val cipher = Cipher.getInstance(KEYSTORE_TRANSFORMATION)
-        cipher.init(Cipher.DECRYPT_MODE, getOrCreateSecretKey(), GCMParameterSpec(128, iv))
-        return String(cipher.doFinal(encrypted), StandardCharsets.UTF_8)
-    }
-
-    private fun getOrCreateSecretKey(): SecretKey {
-        val keyStore = KeyStore.getInstance(ANDROID_KEYSTORE).apply { load(null) }
-        (keyStore.getKey(KEYSTORE_ALIAS, null) as? SecretKey)?.let { return it }
-        return KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, ANDROID_KEYSTORE).run {
-            init(
-                KeyGenParameterSpec.Builder(
-                    KEYSTORE_ALIAS,
-                    KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT
-                )
-                    .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
-                    .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
-                    .setKeySize(256)
-                    .build()
-            )
-            generateKey()
-        }
     }
 
     private fun beginNutritionScanInternal(
@@ -1541,6 +1545,11 @@ class MainActivity : ComponentActivity() {
             dispatchAiResponse(requestId, false, "", "Consentement requis avant l’envoi externe.", "nutrition")
             return
         }
+        val consentToken = if (isRun4Fixture()) null else aiConsentCoordinator.begin()
+        if (!isRun4Fixture() && consentToken == null) {
+            dispatchAiResponse(requestId, false, "", "Consentement requis avant l’envoi externe.", "nutrition")
+            return
+        }
         val apiKey = readOpenAiKey()
         if (apiKey == null && !isRun4Fixture()) {
             dispatchAiResponse(requestId, false, "", "Clé OpenAI non configurée.", "nutrition")
@@ -1586,7 +1595,7 @@ class MainActivity : ComponentActivity() {
             },
             responseGuard = {
                 generation == nutritionAnalysisGeneration.get() &&
-                    hasAiHealthConsentInternal() &&
+                    (isRun4Fixture() || aiConsentCoordinator.accepts(consentToken)) &&
                     isCurrentNutritionScan(scanId, requestId)
             },
             onAccepted = {
@@ -1624,13 +1633,36 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun hasAiHealthConsentInternal(): Boolean =
-        appPreferences.getBoolean(AI_HEALTH_CONSENT, false) || isRun4Fixture()
+        aiConsentCoordinator.isConsented() || isRun4Fixture()
+
+    private fun setAiConsent(consented: Boolean) {
+        appPreferences.edit { putBoolean(AI_HEALTH_CONSENT, consented) }
+        if (consented) {
+            aiConsentCoordinator.grant()
+            dispatchWebEvent("vitalis-ai-consent", JSONObject().put("consented", true))
+        } else revokeAiConsent("consent_revoked")
+    }
+
+    private fun revokeAiConsent(reason: String) {
+        appPreferences.edit { putBoolean(AI_HEALTH_CONSENT, false) }
+        aiConsentCoordinator.revoke()
+        activeHealthAiJobs.values.forEach(Job::cancel)
+        activeHealthAiJobs.clear()
+        invalidateActiveNutritionAnalysis(reason)
+        dispatchWebEvent("vitalis-ai-consent", JSONObject().apply {
+            put("consented", false)
+            put("reason", reason)
+        })
+    }
 
     private fun isRun4Fixture(): Boolean = BuildConfig.DEBUG &&
         intent.getBooleanExtra(EXTRA_RUN4_FIXTURE, false)
 
     private fun isRun5Fixture(): Boolean = BuildConfig.DEBUG &&
         intent.getBooleanExtra(EXTRA_RUN5_FIXTURE, false)
+
+    private fun isRun6Fixture(): Boolean = BuildConfig.DEBUG &&
+        intent.getBooleanExtra(EXTRA_RUN6_FIXTURE, false)
 
     private fun buildRun5FixtureResult(): JSONObject {
         val oneShot = RecognitionSessionCoordinator { "fixture-voice" }
@@ -1701,6 +1733,71 @@ class MainActivity : ComponentActivity() {
             put("setupOnly", connectorState("fiton", true, false, false))
             put("directUnavailable", connectorState("strava", true, false, false))
             put("appleHealth", connectorState("apple_health", false, false, false))
+        }
+    }
+
+    private fun buildRun6FixtureResult(): JSONObject {
+        val consent = AiConsentCoordinator(true)
+        val issuedBeforeRevoke = consent.begin()
+        consent.revoke()
+        val lateResponseRejected = !consent.accepts(issuedBeforeRevoke)
+
+        val fixtureKey = "sk-" + "run6".repeat(12)
+        val saved = secureSecretStore.save(AiKeyKind.HEALTH, fixtureKey)
+        val status = secureSecretStore.status(AiKeyKind.HEALTH)
+        val usableOnlyInternally = secureSecretStore.readForRequest(AiKeyKind.HEALTH) == fixtureKey
+        secureSecretStore.delete(AiKeyKind.HEALTH)
+        val deleted = !secureSecretStore.status(AiKeyKind.HEALTH).configured
+
+        val export = VitalisExportCodec.encode(
+            VitalisLocalSnapshot(
+                preferences = mapOf(
+                    SELECTED_HEALTH_DATE_KEY to "2026-09-27",
+                    "openai_api_key" to fixtureKey
+                ),
+                nutrition = JSONArray(),
+                selectedCoach = "general",
+                dashboardSettings = JSONObject().put("compact", true),
+                localJournal = JSONArray(),
+                consentState = true
+            ),
+            BuildConfig.VERSION_NAME,
+            Instant.parse("2026-09-27T00:00:00Z")
+        )
+        val exportBytes = export.toByteArray(StandardCharsets.UTF_8)
+        val oversized = ByteArray(VitalisExportCodec.MAX_IMPORT_BYTES + 1)
+        val future = JSONObject(export).put("version", VitalisExportCodec.VERSION + 1)
+            .toString().toByteArray(StandardCharsets.UTF_8)
+
+        return JSONObject().apply {
+            put("exactOriginAllowed", OriginBridgePolicy.canInvoke(
+                OriginBridgePolicy.APPASSETS_ORIGIN, true, "refreshHealthData"
+            ))
+            put("subframeRejected", !OriginBridgePolicy.canInvoke(
+                OriginBridgePolicy.APPASSETS_ORIGIN, false, "refreshHealthData"
+            ))
+            put("deceptiveOriginRejected", !OriginBridgePolicy.canInvoke(
+                "https://appassets.androidplatform.net.attacker.invalid", true, "refreshHealthData"
+            ))
+            put("dataOriginRejected", !OriginBridgePolicy.canInvoke(
+                "data:text/html,hello", true, "refreshHealthData"
+            ))
+            put("fileOriginRejected", !OriginBridgePolicy.canInvoke(
+                "file:///tmp/vitalis.html", true, "refreshHealthData"
+            ))
+            put("javascriptOriginRejected", !OriginBridgePolicy.canInvoke(
+                "javascript:alert(1)", true, "refreshHealthData"
+            ))
+            put("lateResponseRejected", lateResponseRejected)
+            put("keySaved", saved)
+            put("keyStatusMasked", status.configured && status.maskedSuffix?.contains("run6") == true)
+            put("keyUsableOnlyInternally", usableOnlyInternally)
+            put("keyDeleted", deleted)
+            put("exportExcludesSecrets", !export.contains(fixtureKey) && !export.contains("openai_api_key"))
+            put("validImportAccepted", VitalisExportCodec.validate(exportBytes).valid)
+            put("malformedImportRejected", !VitalisExportCodec.validate("{".toByteArray()).valid)
+            put("oversizedImportRejected", !VitalisExportCodec.validate(oversized).valid)
+            put("futureImportRejected", !VitalisExportCodec.validate(future).valid)
         }
     }
 
@@ -2287,6 +2384,18 @@ class MainActivity : ComponentActivity() {
                     HealthConnectStateCode.NOT_SUPPORTED,
                     "Fixture voix et connecteurs",
                     reason = "run5_fixture"
+                )
+            )
+            return
+        }
+        if (BuildConfig.DEBUG && intent.getBooleanExtra(EXTRA_RUN6_FIXTURE, false)) {
+            debugRefreshRequests.add(selectedDate.toString())
+            dispatchManualOnlyHealthData(
+                selectedDate,
+                HealthConnectStateModel(
+                    HealthConnectStateCode.NOT_SUPPORTED,
+                    "Fixture sécurité et confidentialité",
+                    reason = "run6_fixture"
                 )
             )
             return
@@ -3030,6 +3139,7 @@ class MainActivity : ComponentActivity() {
         internal const val EXTRA_RUN3_FIXTURE = "com.vitalis.healthos.RUN3_FIXTURE"
         internal const val EXTRA_RUN4_FIXTURE = "com.vitalis.healthos.RUN4_FIXTURE"
         internal const val EXTRA_RUN5_FIXTURE = "com.vitalis.healthos.RUN5_FIXTURE"
+        internal const val EXTRA_RUN6_FIXTURE = "com.vitalis.healthos.RUN6_FIXTURE"
         internal const val EXTRA_TEST_TODAY_ISO = "com.vitalis.healthos.TEST_TODAY_ISO"
         private const val SELECTED_HEALTH_DATE_KEY = "selected_health_date_iso"
         private const val HEALTH_PERMISSION_REQUESTED_KEY =
@@ -3046,6 +3156,8 @@ class MainActivity : ComponentActivity() {
             "https://$LOCAL_ASSET_HOST/assets/vitalis/run4-nutrition-fixture.html"
         private const val LOCAL_RUN5_TEST_URL =
             "https://$LOCAL_ASSET_HOST/assets/vitalis/run5-voice-connectors-fixture.html"
+        private const val LOCAL_RUN6_TEST_URL =
+            "https://$LOCAL_ASSET_HOST/assets/vitalis/run6-security-privacy-fixture.html"
         private const val VITALIS_HOST = "vitalis-health-os.gillesarnaudasse65.chatgpt.site"
         private const val VITALIS_URL = "https://$VITALIS_HOST/"
         private const val COACH_ASSET_PATH = "/__vitalis/coaches/"
@@ -3064,21 +3176,17 @@ class MainActivity : ComponentActivity() {
         private const val MAX_SPEECH_TEXT_LENGTH = 8_000
         private const val MAX_AI_PROMPT_LENGTH = 4_000
         private const val MAX_DEVELOPER_PROMPT_LENGTH = 8_000
+        private const val MAX_BRIDGE_MESSAGE_CHARS = 65_536
+        private const val NATIVE_CHANNEL_NAME = "VitalisNativeChannel"
         private const val OPENAI_RESPONSES_URL = "https://api.openai.com/v1/responses"
         private const val OPENAI_MODEL = "gpt-5.6"
         private const val CHATGPT_WORK_URL = "https://chatgpt.com/codex"
         private const val APP_PREFS = "vitalis_preferences"
-        private const val SECURE_PREFS = "vitalis_secure_preferences"
-        private const val OPENAI_SECRET_NAME = "openai_api_key"
-        private const val OPENAI_DEVELOPER_SECRET_NAME = "openai_developer_api_key"
         private const val AI_HEALTH_CONSENT = "ai_health_consent"
         private const val MANUAL_MEALS_KEY = "manual_meal_estimates"
         private const val PENDING_NUTRITION_SCAN_KEY = "pending_nutrition_scan_v1"
         private const val STATE_NUTRITION_CAMERA_FILE = "nutrition_camera_file"
         private const val STATE_NUTRITION_CAMERA_URI = "nutrition_camera_uri"
-        private const val ANDROID_KEYSTORE = "AndroidKeyStore"
-        private const val KEYSTORE_ALIAS = "vitalis_openai_key_v1"
-        private const val KEYSTORE_TRANSFORMATION = "AES/GCM/NoPadding"
         private const val COACH_SAFETY_INSTRUCTIONS =
             "Réponds en français clair, professionnel, chaleureux et concret. Analyse uniquement les données fournies, " +
                 "indique les données manquantes et cite les connecteurs visibles. Ne pose aucun diagnostic et ne remplace " +

@@ -1,0 +1,12 @@
+<!doctype html>
+<html><body><script>
+  (function(){
+    var channelType=typeof VitalisNativeChannel;
+    parent.postMessage({type:"run6-subframe-channel",channel:channelType},"*");
+    if(channelType==="object") {
+      VitalisNativeChannel.postMessage(JSON.stringify({
+        id:"run6-subframe",method:"refreshHealthData",args:[]
+      }));
+    }
+  })();
+</script></body></html>

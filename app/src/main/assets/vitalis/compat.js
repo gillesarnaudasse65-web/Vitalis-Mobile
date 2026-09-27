@@ -31,6 +31,7 @@
     };
     entries.push(entry);
     localStorage.setItem(STORE_KEY, JSON.stringify(entries.slice(-500)));
+    window.dispatchEvent(new CustomEvent("vitalis-local-state-changed"));
     window.dispatchEvent(new CustomEvent("vitalis-journal-entry", { detail: entry }));
     document.dispatchEvent(new CustomEvent("vitalis-journal-entry", { detail: entry }));
     return entry;
@@ -890,38 +891,34 @@
   function setup() {
     var root = overlay(
       '<div class="vitalis-ai-head"><div class="vitalis-ai-avatar">🧠</div><div class="vitalis-ai-title"><b>Activer Kofi IA</b><small>Configuration sécurisée</small></div><button class="vitalis-ai-icon" data-ai-close>×</button></div>' +
-      '<div class="vitalis-ai-config"><h4>Clé OpenAI dédiée</h4><p>Collez la clé « Vitalis AI » créée sur OpenAI Platform. Elle sera chiffrée par Android Keystore et ne sera jamais ajoutée au code ni à GitHub.</p>' +
-      '<input type="password" autocomplete="off" spellcheck="false" data-ai-key placeholder="sk-proj-…">' +
+      '<div class="vitalis-ai-config"><h4>Clé OpenAI dédiée</h4><p>La clé « Vitalis AI » est saisie uniquement dans l’écran Android protégé et n’est jamais exposée à cette page.</p>' +
+      '<button class="vitalis-ai-secondary" data-ai-native-key>' +
+      (bridge && bridge.hasOpenAiKey && bridge.hasOpenAiKey() ? 'Gérer la clé santé' : 'Configurer la clé santé') + '</button>' +
       '<label class="vitalis-ai-check"><input type="checkbox" data-ai-consent><span>J’autorise Vitalis à transmettre à OpenAI les données santé nécessaires à mes demandes et les photos de repas que je choisis d’analyser.</span></label>' +
       '<button class="vitalis-ai-primary" data-ai-save>Activer l’IA</button>' +
-      (bridge && bridge.hasOpenAiKey && bridge.hasOpenAiKey() ? '<button class="vitalis-ai-secondary" data-ai-clear>Désactiver et effacer la clé</button>' : "") +
+      '<button class="vitalis-ai-secondary" data-ai-privacy>Confidentialité et données</button>' +
       '<p class="vitalis-ai-note">Kofi fournit des conseils de bien-être informatifs et ne remplace pas un professionnel de santé.</p></div>'
     );
+    root.querySelector("[data-ai-native-key]").onclick = function () {
+      if (bridge && bridge.openKeySettings) bridge.openKeySettings("health");
+    };
+    root.querySelector("[data-ai-privacy]").onclick = function () {
+      if (bridge && bridge.openPrivacyDataSettings) bridge.openPrivacyDataSettings();
+    };
     root.querySelector("[data-ai-save]").onclick = function () {
-      var key = root.querySelector("[data-ai-key]").value.trim();
       var consent = root.querySelector("[data-ai-consent]").checked;
-      if (!bridge || !bridge.saveOpenAiKey) {
-        alert("La configuration sécurisée est disponible dans l’application Android Vitalis.");
-        return;
-      }
       if (!consent) {
         alert("Votre consentement est nécessaire pour utiliser l’analyse IA des données santé.");
         return;
       }
-      if (!bridge.saveOpenAiKey(key)) {
-        alert("La clé semble invalide. Vérifiez la clé Vitalis AI puis réessayez.");
+      if (!bridge || !bridge.hasOpenAiKey || !bridge.hasOpenAiKey()) {
+        alert("Configurez d’abord la clé Vitalis AI dans l’écran Android protégé.");
+        if (bridge && bridge.openKeySettings) bridge.openKeySettings("health");
         return;
       }
       bridge.setAiHealthConsent(true);
       root.remove();
       openCoach();
-    };
-    var clear = root.querySelector("[data-ai-clear]");
-    if (clear) clear.onclick = function () {
-      if (bridge && bridge.clearOpenAiKey) bridge.clearOpenAiKey();
-      if (bridge && bridge.setAiHealthConsent) bridge.setAiHealthConsent(false);
-      root.remove();
-      alert("Kofi IA est désactivé et la clé locale a été effacée.");
     };
   }
 
@@ -1159,8 +1156,8 @@
       if (!voiceOn && bridge && bridge.stopSpeaking) bridge.stopSpeaking();
     },
     clearKey: function () {
-      if (bridge && bridge.clearOpenAiKey) bridge.clearOpenAiKey();
       if (bridge && bridge.setAiHealthConsent) bridge.setAiHealthConsent(false);
+      if (bridge && bridge.openKeySettings) bridge.openKeySettings("health");
     }
   };
 })();

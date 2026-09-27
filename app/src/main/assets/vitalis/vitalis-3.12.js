@@ -145,6 +145,7 @@
   function setSelectedCoach(id) {
     selectedCoachId = coachById(id).id;
     localStorage.setItem(SELECTED_COACH_KEY, selectedCoachId);
+    window.dispatchEvent(new CustomEvent("vitalis-local-state-changed"));
     document.documentElement.setAttribute("data-vitalis-selected-coach", selectedCoachId);
     updateExistingCoachCard();
   }
@@ -210,33 +211,34 @@
   function configureHealthAi(nextCoach, onConfigured) {
     var root = overlay(
       '<div><h3>Activer les coachs IA</h3><div class="vitalis-agent-chip-312">Configuration sécurisée</div></div>',
-      '<div class="vitalis-ai-config"><p>Renseignez la clé dédiée « Vitalis AI ». Elle est chiffrée par Android Keystore et n’est jamais intégrée à l’APK.</p>' +
-      '<input type="password" autocomplete="off" spellcheck="false" data-health-key placeholder="sk-proj-…">' +
+      '<div class="vitalis-ai-config"><p>La clé « Vitalis AI » est saisie uniquement dans l’écran Android protégé. Elle n’est jamais exposée à cette page.</p>' +
+      '<button class="vitalis-ai-secondary" data-health-native-key>' +
+      (bridge && bridge.hasOpenAiKey && bridge.hasOpenAiKey() ? 'Gérer la clé santé' : 'Configurer la clé santé') + '</button>' +
       '<label class="vitalis-ai-check"><input type="checkbox" data-health-consent><span>J’autorise l’envoi à OpenAI des données santé nécessaires aux demandes et des photos que je choisis d’analyser.</span></label>' +
       '<button class="vitalis-ai-primary" data-health-save>Activer les coachs IA</button>' +
-      (bridge && bridge.hasOpenAiKey && bridge.hasOpenAiKey() ? '<button class="vitalis-ai-secondary" data-health-clear>Effacer la clé santé locale</button>' : "") +
+      '<button class="vitalis-ai-secondary" data-health-privacy>Confidentialité et données</button>' +
       '<p class="vitalis-ai-note">Les coachs accompagnent le bien-être et ne posent aucun diagnostic.</p></div>'
     );
+    root.querySelector("[data-health-native-key]").onclick = function () {
+      if (bridge && bridge.openKeySettings) bridge.openKeySettings("health");
+    };
+    root.querySelector("[data-health-privacy]").onclick = function () {
+      if (bridge && bridge.openPrivacyDataSettings) bridge.openPrivacyDataSettings();
+    };
     root.querySelector("[data-health-save]").onclick = function () {
-      var key = root.querySelector("[data-health-key]").value.trim();
       if (!root.querySelector("[data-health-consent]").checked) {
         alert("Le consentement est nécessaire pour analyser les données santé.");
         return;
       }
-      if (!bridge || !bridge.saveOpenAiKey || !bridge.saveOpenAiKey(key)) {
-        alert("La clé semble invalide. Vérifiez-la puis réessayez.");
+      if (!bridge || !bridge.hasOpenAiKey || !bridge.hasOpenAiKey()) {
+        alert("Configurez d’abord la clé Vitalis AI dans l’écran Android protégé.");
+        if (bridge && bridge.openKeySettings) bridge.openKeySettings("health");
         return;
       }
       bridge.setAiHealthConsent(true);
       root.remove();
       if (onConfigured) onConfigured();
       else openCoach((nextCoach && nextCoach.id) || selectedCoachId);
-    };
-    var clear = root.querySelector("[data-health-clear]");
-    if (clear) clear.onclick = function () {
-      bridge.clearOpenAiKey();
-      bridge.setAiHealthConsent(false);
-      root.remove();
     };
   }
 
@@ -372,25 +374,13 @@
   function configureDeveloperAi() {
     var root = overlay(
       '<div class="vitalis-developer-icon-312">⌘</div><div><h3>Vitalis Developer AI</h3><div class="vitalis-agent-chip-312">Clé séparée</div></div>',
-      '<div class="vitalis-ai-config"><p>Renseignez uniquement la clé « Vitalis Developer AI ». Elle reste chiffrée sur le téléphone et n’est jamais publiée dans l’APK ou GitHub.</p>' +
-      '<input type="password" autocomplete="off" spellcheck="false" data-developer-key placeholder="sk-proj-…">' +
-      '<button class="vitalis-ai-primary" data-developer-save>Activer le développeur IA</button>' +
-      (developerAiConfigured() ? '<button class="vitalis-ai-secondary" data-developer-clear>Effacer la clé développeur locale</button>' : "") +
+      '<div class="vitalis-ai-config"><p>La clé « Vitalis Developer AI » est gérée uniquement dans l’écran Android protégé et n’est jamais exposée à cette page.</p>' +
+      '<button class="vitalis-ai-primary" data-developer-native-key>' +
+      (developerAiConfigured() ? 'Gérer la clé développeur' : 'Configurer la clé développeur') + '</button>' +
       '<p class="vitalis-ai-note">L’IA prépare les demandes. Les modifications réelles sont exécutées dans ChatGPT Work avec validation et accès GitHub.</p></div>'
     );
-    root.querySelector("[data-developer-save]").onclick = function () {
-      var key = root.querySelector("[data-developer-key]").value.trim();
-      if (!bridge || !bridge.saveDeveloperAiKey || !bridge.saveDeveloperAiKey(key)) {
-        alert("La clé semble invalide. Vérifiez la clé Vitalis Developer AI.");
-        return;
-      }
-      root.remove();
-      openDeveloper();
-    };
-    var clear = root.querySelector("[data-developer-clear]");
-    if (clear) clear.onclick = function () {
-      bridge.clearDeveloperAiKey();
-      root.remove();
+    root.querySelector("[data-developer-native-key]").onclick = function () {
+      if (bridge && bridge.openKeySettings) bridge.openKeySettings("developer");
     };
   }
 
@@ -505,6 +495,7 @@
         metadataOnly:true
       });
       localStorage.setItem(key, JSON.stringify(entries.slice(-500)));
+      window.dispatchEvent(new CustomEvent("vitalis-local-state-changed"));
     } catch (_) {}
   }
 
@@ -760,6 +751,7 @@
         });
         localStorage.setItem(offlineKey, JSON.stringify(offline));
       }
+      window.dispatchEvent(new CustomEvent("vitalis-local-state-changed"));
     } catch (_) {}
   });
 

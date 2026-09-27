@@ -1,5 +1,7 @@
 # Vitalis — verified baseline audit (Run 0)
 
+> Historical baseline note: this file records the pre-hardening 3.14 audit. Run 6 replaces the documented remote-DOM key entry and per-frame `addJavascriptInterface` risks; current architecture and remaining release gates are in `VITALIS_RUN6_SECURITY_RELEASE.md`.
+
 **Actual version: `3.14.0-coaches-connectors`, versionCode `19`.** The requested baseline was `3.14.0`; the suffix is a verified difference, not an audit change.
 
 ## 1. Executive summary
