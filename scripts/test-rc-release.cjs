@@ -55,3 +55,16 @@ test('production release is manual protected fail-closed and removes temporary k
 test('privacy policy remains a draft requiring legal review', () => {
   assert.match(read('docs/PRIVACY_POLICY_DRAFT.md'), /DRAFT[\s\S]*REQUIRES LEGAL REVIEW/i);
 });
+
+test('production signing identity documentation contains no secret value and requires recovery controls', () => {
+  const identity = read('docs/VITALIS_SIGNING_IDENTITY.md');
+  assert.match(identity, /FIRST STABLE VITALIS PRODUCTION IDENTITY/);
+  assert.match(identity, /vitalis-production/);
+  assert.match(identity, /RSA 4096/);
+  assert.match(identity, /Backup A/);
+  assert.match(identity, /Backup B/);
+  assert.match(identity, /Password vault/);
+  assert.match(identity, /NOT CONFIRMED/);
+  assert.match(identity, /VITALIS_KEYSTORE_BASE64/);
+  assert.doesNotMatch(identity, /BEGIN (?:RSA )?PRIVATE KEY/);
+});

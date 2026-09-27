@@ -76,3 +76,9 @@ The last completed RC run before this clearance change was GitHub Actions run 97
 **RC FAIL**
 
 The decision can change only after secure signing identity creation and backup, production artifact verification, actual physical acceptance, and the same-certificate upgrade test all pass.
+
+## Secure Windows handoff
+
+The non-secret identity policy, exact interactive `keytool` command, backup gate, Base64 conversion, GitHub environment-secret names, and production workflow procedure are recorded in `VITALIS_SIGNING_IDENTITY.md`.
+
+Next owner action: create the key locally on the trusted Windows workstation, confirm two protected backups and password-vault storage, configure the four GitHub `production` environment secrets, then run the manual production workflow. Do not send any password, Base64 keystore value, or keystore file through chat.
