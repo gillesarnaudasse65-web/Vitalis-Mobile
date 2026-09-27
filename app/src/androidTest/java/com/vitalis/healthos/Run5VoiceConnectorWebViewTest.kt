@@ -69,7 +69,10 @@ class Run5VoiceConnectorWebViewTest {
 
             scenario.recreate()
             await(scenario, 15_000) { eval(scenario, "window.__run5Fixture===true") == "true" }
-            assertEquals("false", eval(scenario, "String(VitalisAndroid.isMicrophoneEnabled())"))
+            assertEquals(
+                "false",
+                decoded(eval(scenario, "String(VitalisAndroid.isMicrophoneEnabled())"))
+            )
         }
     }
 
