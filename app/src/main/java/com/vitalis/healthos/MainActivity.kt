@@ -261,12 +261,13 @@ class MainActivity : ComponentActivity() {
                     ?.let(Uri::parse)
             }
         }
-        val deviceClock = if (BuildConfig.DEBUG && (
-                intent.getBooleanExtra(EXTRA_RUN2_FIXTURE, false) ||
-                    intent.getBooleanExtra(EXTRA_RUN3_FIXTURE, false) ||
-                    intent.getBooleanExtra(EXTRA_RUN4_FIXTURE, false) ||
-                    intent.getBooleanExtra(EXTRA_RUN5_FIXTURE, false)
-                )) {
+        val debugFixture = BuildConfig.DEBUG && (
+            intent.getBooleanExtra(EXTRA_RUN2_FIXTURE, false) ||
+                intent.getBooleanExtra(EXTRA_RUN3_FIXTURE, false) ||
+                intent.getBooleanExtra(EXTRA_RUN4_FIXTURE, false) ||
+                intent.getBooleanExtra(EXTRA_RUN5_FIXTURE, false)
+            )
+        val deviceClock = if (debugFixture) {
             val fixed = BridgeInputPolicy.date(intent.getStringExtra(EXTRA_TEST_TODAY_ISO))
             fixed?.let { Clock.fixed(it.atStartOfDay(java.time.ZoneId.systemDefault()).toInstant(),
                 java.time.ZoneId.systemDefault()) } ?: Clock.systemDefaultZone()
@@ -288,7 +289,13 @@ class MainActivity : ComponentActivity() {
                 ?.takeIf(NutritionIds::valid)
                 ?.let(::restoreNutritionSession)
         }
-        dateState = SelectedDateState(deviceClock, appPreferences.getString(SELECTED_HEALTH_DATE_KEY, null)) {
+        // Instrumentation classes share the debug app's preferences. A previous fixture can
+        // finish its WebView callbacks after the next class clears the date, especially across
+        // midnight. Start each new fixture from its injected clock; recreation still restores
+        // the date selected inside that same scenario.
+        val restoredDate = if (debugFixture && savedInstanceState == null) null
+            else appPreferences.getString(SELECTED_HEALTH_DATE_KEY, null)
+        dateState = SelectedDateState(deviceClock, restoredDate) {
             appPreferences.edit { putString(SELECTED_HEALTH_DATE_KEY, it) }
         }
         window.statusBarColor = Color.parseColor("#063C30")
