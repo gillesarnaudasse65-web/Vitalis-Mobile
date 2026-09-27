@@ -34,7 +34,9 @@
     });
     entries.push(entry);
     localStorage.setItem(STORE_KEY, JSON.stringify(entries.slice(-500)));
-    window.dispatchEvent(new CustomEvent("vitalis-local-state-changed"));
+    setTimeout(function () {
+      window.dispatchEvent(new CustomEvent("vitalis-local-state-changed"));
+    }, 0);
     window.dispatchEvent(new CustomEvent("vitalis-journal-entry", { detail: entry }));
     document.dispatchEvent(new CustomEvent("vitalis-journal-entry", { detail: entry }));
     return entry;
@@ -147,7 +149,9 @@
     var after = before.filter(function (entry) { return String(entry.id) !== String(entryId); });
     if (after.length === before.length) return false;
     localStorage.setItem(STORE_KEY, JSON.stringify(after));
-    window.dispatchEvent(new CustomEvent("vitalis-local-state-changed"));
+    setTimeout(function () {
+      window.dispatchEvent(new CustomEvent("vitalis-local-state-changed"));
+    }, 0);
     return true;
   }
 

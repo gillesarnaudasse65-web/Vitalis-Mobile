@@ -75,6 +75,7 @@ test('detail views date selection appearance and customization share one setting
   assert.match(ux, /function openAppearance\(\)/);
   assert.match(ux, /function openCustomize\(\)/);
   assert.match(ux, /offline\.finalUx = settings/);
+  assert.match(ux, /setTimeout\(function \(\) \{\s*window\.dispatchEvent\(new CustomEvent\("vitalis-local-state-changed"\)\)/);
   assert.match(ux, /ondragstart/);
   assert.match(ux, /onpointerdown/);
   assert.match(ux, /setTimeout\(function \(\) \{[\s\S]*active = true; dragged/, 'long press enables touch reordering');

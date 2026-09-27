@@ -56,7 +56,9 @@
     var offline = readOffline();
     offline.finalUx = settings;
     localStorage.setItem(STORE_KEY, JSON.stringify(offline));
-    window.dispatchEvent(new CustomEvent("vitalis-local-state-changed"));
+    setTimeout(function () {
+      window.dispatchEvent(new CustomEvent("vitalis-local-state-changed"));
+    }, 0);
     applyTheme();
   }
   function readHealth() {
