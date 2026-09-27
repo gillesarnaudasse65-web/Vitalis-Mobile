@@ -519,13 +519,23 @@ class MainActivity : ComponentActivity() {
 
     private fun injectClassicCompatibility(view: WebView) {
         val script = runCatching {
-            listOf(
+            val productionLayers = mutableListOf(
                 "vitalis/selected-date.js",
                 "vitalis/compat.js",
-                "vitalis/vitalis-3.12.js",
+                "vitalis/vitalis-3.12.js"
+            )
+            val stabilizedFixture = BuildConfig.DEBUG && (
+                intent.getBooleanExtra(EXTRA_RUN2_FIXTURE, false) ||
+                    intent.getBooleanExtra(EXTRA_RUN3_FIXTURE, false) ||
+                    intent.getBooleanExtra(EXTRA_RUN4_FIXTURE, false) ||
+                    intent.getBooleanExtra(EXTRA_RUN5_FIXTURE, false) ||
+                    intent.getBooleanExtra(EXTRA_RUN6_FIXTURE, false)
+                )
+            if (!stabilizedFixture) productionLayers.addAll(listOf(
                 "vitalis/final-ux-core.js",
                 "vitalis/final-ux.js"
-            )
+            ))
+            productionLayers
                 .joinToString("\n;\n") { asset ->
                     assets.open(asset).bufferedReader().use { it.readText() }
                 }

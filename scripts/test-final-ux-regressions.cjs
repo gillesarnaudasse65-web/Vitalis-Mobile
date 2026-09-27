@@ -92,6 +92,7 @@ test('Final UX injection follows all stabilized security layers', () => {
   const run6 = activity.indexOf('vitalis/vitalis-3.12.js');
   const finalUx = activity.indexOf('vitalis/final-ux.js');
   assert.ok(selected < compatIndex && compatIndex < run6 && run6 < finalUx);
+  assert.match(activity, /if \(!stabilizedFixture\) productionLayers\.addAll/);
   assert.match(activity, /OriginBridgePolicy\.allowedOriginRules\(\)/);
   assert.match(activity, /WebViewFeature\.WEB_MESSAGE_LISTENER/);
   assert.doesNotMatch(ux, /saveOpenAiKey|readOpenAiKey|clearOpenAiKey/);

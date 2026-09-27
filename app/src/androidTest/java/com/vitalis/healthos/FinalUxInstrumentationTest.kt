@@ -33,7 +33,9 @@ class FinalUxInstrumentationTest {
             ready(scenario)
             eval(scenario, "VitalisFinalUX.restoreDefaults();true")
             await(scenario) { eval(scenario, "document.querySelectorAll('[data-widget]').length>=10") == "true" }
-            assertEquals("82", eval(scenario, "document.querySelector('.vux-score-ring strong').textContent"))
+            assertEquals("82", decoded(eval(
+                scenario, "document.querySelector('.vux-score-ring strong').textContent"
+            )))
             assertEquals("true", eval(scenario, "!!document.querySelector('[data-widget=activity]')"))
             assertEquals("true", eval(scenario, "!!document.querySelector('[data-widget=sleep]')"))
             screenshot("classic-dashboard")
