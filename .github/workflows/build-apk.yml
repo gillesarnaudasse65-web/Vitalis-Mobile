@@ -134,15 +134,38 @@ jobs:
             app/build/outputs/bundle/release/app-release.aab \
             app/build/outputs/mapping/release/mapping.txt \
             > app/build/distributions/vitalis-sha256.txt
+      - name: Verify and record release signatures
+        run: |
+          set -euo pipefail
+          mkdir -p app/build/distributions
+          {
+            echo "Vitalis 3.15.0-rc1"
+            echo "Signing label: $VITALIS_SIGNING_LABEL"
+            echo "Distribution status: $([ "$VITALIS_SIGNING_AVAILABLE" = true ] && echo PRODUCTION_CANDIDATE || echo 'NOT FOR PRODUCTION DISTRIBUTION')"
+            echo
+            echo "APK signer verification"
+            apksigner verify --verbose --print-certs app/build/outputs/apk/release/app-release.apk
+            echo
+            echo "AAB JAR signature verification"
+            jarsigner -verify -verbose -certs app/build/outputs/bundle/release/app-release.aab
+          } > app/build/distributions/vitalis-signature-report.txt
+          stat --printf='%n %s bytes\n' \
+            app/build/outputs/apk/release/app-release.apk \
+            app/build/outputs/bundle/release/app-release.aab \
+            app/build/outputs/mapping/release/mapping.txt \
+            > app/build/distributions/vitalis-artifact-sizes.txt
       - name: Upload release candidate artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: Vitalis-release-${{ env.VITALIS_SIGNING_LABEL }}
+          name: Vitalis-3.15.0-rc1-${{ env.VITALIS_SIGNING_LABEL }}
           path: |
             app/build/outputs/apk/release/app-release.apk
             app/build/outputs/bundle/release/app-release.aab
             app/build/outputs/mapping/release/mapping.txt
             app/build/distributions/vitalis-sha256.txt
+            app/build/distributions/vitalis-signature-report.txt
+            app/build/distributions/vitalis-artifact-sizes.txt
+            docs/RELEASE_NOTES_3_15_0_RC1.md
           if-no-files-found: error
           retention-days: 90
 
