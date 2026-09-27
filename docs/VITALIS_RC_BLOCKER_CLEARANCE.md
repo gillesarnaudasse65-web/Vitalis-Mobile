@@ -8,7 +8,7 @@ Scope: release-gate clearance only; no product feature changes.
 
 **RC FAIL**
 
-Automated validation was green at 147/147, but production signing, physical-device acceptance, and production-signed upgrade continuity were not established.
+Automated validation is green at 149/149 on GitHub Actions run 99 attempt 3, but production signing, physical-device acceptance, and production-signed upgrade continuity are not established.
 
 ## Signing lineage
 
@@ -33,13 +33,13 @@ The temporary keystore is permission-restricted and deleted from the runner afte
 - Certificate subject: PENDING SECURE KEY CREATION
 - Certificate SHA-256: PENDING SECURE KEY CREATION
 - Validity: PENDING SECURE KEY CREATION
-- Backup status: **NOT CONFIRMED**
+- Backup status: **BACKUP_BLOCKED**
 
 Key creation must wait for a recoverable secret-storage route. Losing the production key or its passwords may prevent seamless upgrades permanently. At least two secure backups are required outside the repository.
 
 ## Device matrix
 
-The owner confirmed that a physical Android device and an ADB-capable workstation are available. No physical result is marked passed until the production-signed APK is installed and the acceptance matrix is actually executed.
+The owner confirmed that a physical Android device is available. The current acceptance path does not require ADB or another local shell. No physical result is marked passed until the production-signed APK is installed and the acceptance matrix is actually executed.
 
 | Device | Android | Display/RAM | Result |
 |---|---|---|---|
@@ -61,7 +61,7 @@ Current result: **NOT TESTED — PRODUCTION IDENTITY REQUIRED**.
 
 ## Automated status
 
-The last completed RC run before this clearance change was GitHub Actions run 97: 51/51 source tests, 84/84 JVM, 10/10 instrumentation, 2/2 synthetic upgrades, 0 lint errors, and 54 unchanged warnings. The workflow-only clearance change requires a new CI run before its evidence can replace that baseline.
+The last completed RC run before this GitHub-only initialization change was GitHub Actions run 99 attempt 3: 53/53 source tests, 84/84 JVM, 10/10 instrumentation, 2/2 synthetic upgrades, 0 lint errors, and 54 unchanged warnings. This workflow-and-documentation change requires a new CI run before its evidence can replace that baseline.
 
 ## Blockers
 
@@ -77,8 +77,14 @@ The last completed RC run before this clearance change was GitHub Actions run 97
 
 The decision can change only after secure signing identity creation and backup, production artifact verification, actual physical acceptance, and the same-certificate upgrade test all pass.
 
-## Secure Windows handoff
+## GitHub-only initialization handoff
 
-The non-secret identity policy, exact interactive `keytool` command, backup gate, Base64 conversion, GitHub environment-secret names, and production workflow procedure are recorded in `VITALIS_SIGNING_IDENTITY.md`.
+The owner requires a GitHub Web-only path with no local shell, keytool, ADB, or Android Studio. Repository inspection found no verified dedicated secret-writing token or external vault integration. The selected fallback is therefore **Mode C**.
 
-Next owner action: create the key locally on the trusted Windows workstation, confirm two protected backups and password-vault storage, configure the four GitHub `production` environment secrets, then run the manual production workflow. Do not send any password, Base64 keystore value, or keystore file through chat.
+`.github/workflows/initialize-production-signing.yml` is manual-only, uses the `production-signing-init` environment, requires explicit first-lineage confirmation and protected initialization password secrets, checks the public pending marker, and then deliberately aborts before key generation with:
+
+`INITIALIZATION BLOCKED — SECURE SECRET TRANSFER CHANNEL REQUIRED`
+
+No private keystore is created or uploaded. GitHub Secrets alone are not treated as a recoverable backup. Current recovery status: **BACKUP_BLOCKED**.
+
+The GitHub Web and phone-only upgrade procedure is recorded in `VITALIS_PHYSICAL_ACCEPTANCE_CHECKLIST.md`. The versionCode 20 production-signed baseline job must not be added or executed until a secure production identity and independent recovery path exist.

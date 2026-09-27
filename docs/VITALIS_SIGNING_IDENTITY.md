@@ -2,9 +2,9 @@
 
 Application ID: `com.vitalis.healthos`  
 Signing lineage: **FIRST STABLE VITALIS PRODUCTION IDENTITY**  
-Status: **PENDING USER-SIDE SECURE CREATION**
+Status: **PENDING SECURE INITIALIZATION**
 
-Android Debug and earlier CI test certificates are not production identities. Every future production APK/AAB update for `com.vitalis.healthos` must use the permanent identity recorded here after creation.
+Android Debug and earlier CI test certificates are not production identities. Every future production APK/AAB update for `com.vitalis.healthos` must use the permanent identity recorded here after secure initialization.
 
 ## Safe public identity metadata
 
@@ -16,92 +16,85 @@ Android Debug and earlier CI test certificates are not production identities. Ev
 | Creation date | PENDING |
 | Validity | PENDING; requested validity is 10,000 days |
 | Certificate SHA-256 | PENDING |
+| Signing lineage status | PENDING SECURE INITIALIZATION |
 
-Only the public fingerprint and certificate metadata belong in this document. Never add the keystore, passwords, Base64 keystore value, private-key output, or secret-manager recovery data.
+Only public certificate metadata belongs in this document. Never add a keystore, password, Base64 keystore value, private key, privileged token, or vault recovery data.
 
-## Windows creation procedure
+## GitHub-only initialization design
 
-Use PowerShell on the trusted Windows release workstation. Confirm `keytool` is from a trusted JDK 17 installation:
+The manual workflow `.github/workflows/initialize-production-signing.yml` uses the protected environment `production-signing-init` and requires:
 
-```powershell
-keytool -version
-New-Item -ItemType Directory -Force -Path "C:\Vitalis-Signing" | Out-Null
-keytool -genkeypair `
-  -v `
-  -keystore "C:\Vitalis-Signing\vitalis-production.jks" `
-  -alias "vitalis-production" `
-  -keyalg RSA `
-  -keysize 4096 `
-  -validity 10000 `
-  -dname "CN=Vitalis Health OS, OU=Mobile, O=Vitalis, L=Abidjan, ST=Abidjan, C=CI"
-```
+- explicit `confirm_first_identity = true` confirmation;
+- fixed alias `vitalis-production`;
+- protected secrets `VITALIS_INIT_KEYSTORE_PASSWORD` and `VITALIS_INIT_KEY_PASSWORD`;
+- a pending public identity marker, preventing accidental replacement after initialization.
 
-Choose strong passwords interactively. Do not type them into ChatGPT, source files, shell history, PR comments, documentation, or ordinary text files.
+Workflow inputs contain public certificate fields only. Passwords are never accepted as workflow inputs.
 
-Verify the entry and read only its safe public metadata:
+### Selected secure transfer mode: Mode C
 
-```powershell
-keytool -list -v `
-  -keystore "C:\Vitalis-Signing\vitalis-production.jks" `
-  -alias "vitalis-production"
-```
+No dedicated GitHub secret-management token or configured external vault integration is currently verified. The default workflow token cannot be treated as a generic secret-writing channel.
 
-Required observations:
+The initialization workflow therefore stops before key creation with:
 
-- entry type is `PrivateKeyEntry`;
-- alias is `vitalis-production`;
-- subject matches the intended Vitalis identity;
-- SHA-256 fingerprint and validity dates are present.
+`INITIALIZATION BLOCKED — SECURE SECRET TRANSFER CHANNEL REQUIRED`
 
-Record the SHA-256 fingerprint and dates in this document only after independently confirming them.
+It does not generate or upload a permanent keystore. This prevents the only recoverable copy from becoming an ordinary Actions artifact or disappearing with an ephemeral runner.
 
-## Backup and recovery gate
+Mode A may be implemented later only if a deliberately authorized token can write environment secrets and its minimum permissions are reviewed. Mode B may be implemented only after an actual recoverable vault integration exists. Neither capability is currently claimed.
 
-Production signing must not be enabled until all three controls are confirmed:
+## Protected environments
 
-- **Backup A:** primary protected keystore at `C:\Vitalis-Signing\vitalis-production.jks` or an equivalently protected local location;
-- **Backup B:** independently stored encrypted copy outside the release workstation;
-- **Password vault:** keystore and key passwords saved in a secure password manager or equivalent protected organizational vault.
+From GitHub Web, create or review:
 
-Current backup status: **NOT CONFIRMED**.
+1. `production-signing-init`, used only by the one-time initialization preflight;
+2. `production`, used by the existing production APK/AAB build.
 
-Losing the keystore or passwords can permanently prevent seamless Android updates. A copy inside the repository, Downloads, an ordinary shared folder, or an unprotected cloud-synced Desktop does not satisfy this policy.
+Where the repository plan supports them, configure required reviewers and restrict deployment branches to `agent/vitalis-3.15-rc-validation` during RC validation. Protection is recommended but is **NOT VERIFIED** until reviewed in GitHub Settings.
 
-## GitHub production environment
+Initialization environment secret names:
 
-After the backup gate is confirmed, open:
+- `VITALIS_INIT_KEYSTORE_PASSWORD`
+- `VITALIS_INIT_KEY_PASSWORD`
 
-`Vitalis-Mobile → Settings → Environments → production`
-
-Create the environment if absent and add exactly these environment secrets:
+Production environment secret names remain:
 
 - `VITALIS_KEYSTORE_BASE64`
 - `VITALIS_KEYSTORE_PASSWORD`
 - `VITALIS_KEY_ALIAS`
 - `VITALIS_KEY_PASSWORD`
 
-Create the Base64 value locally and copy it directly to the GitHub secret form:
+Never place their values in workflow inputs, logs, summaries, documentation, issues, PR comments, or commit history.
 
-```powershell
-$bytes = [System.IO.File]::ReadAllBytes(
-  "C:\Vitalis-Signing\vitalis-production.jks"
-)
-$base64 = [System.Convert]::ToBase64String($bytes)
-$base64 | Set-Clipboard
-Remove-Variable base64, bytes
-```
+## Recovery gate
 
-`VITALIS_KEYSTORE_BASE64` can reconstruct the encrypted keystore and must be treated as sensitive. Never paste it into ChatGPT, documentation, issues, logs, or commits.
+GitHub Secrets are not a user-downloadable backup vault. A production signing identity is not recoverable merely because its Base64 value exists as a GitHub secret.
 
-Set `VITALIS_KEY_ALIAS` to `vitalis-production`. Enter both passwords directly from the secure vault. Where available, enable required reviewers and restrict deployment branches for the `production` environment.
+Allowed status values:
 
-## Production build and verification
+- `BACKUP_CONFIRMED`: at least one independent, recoverable, access-controlled backup has been verified;
+- `BACKUP_NOT_CONFIRMED`: secret storage may exist, but recovery has not been demonstrated;
+- `BACKUP_BLOCKED`: no approved recovery mechanism exists.
 
-Run `Vitalis Android quality gates` manually on `agent/vitalis-3.15-rc-validation` with `build_production = true`.
+Current backup status: **BACKUP_BLOCKED**.
 
-The job must fail if a secret is absent. A passing job must publish `Vitalis-3.15.0-rc1-production-signed` and record the APK/AAB signatures and SHA-256 checksums. The APK certificate fingerprint must match the fingerprint recorded above and must not be `CN=Android Debug`.
+The release blocker remains open until a recoverable backup exists independently of the ephemeral runner and GitHub secret value.
 
-## Upgrade continuity rule
+## Public metadata publication after secure initialization
 
-Because this is the first stable production lineage, create the controlled versionCode 20 upgrade baseline only after the identity is established. Sign both baseline 20 and RC 21 with this exact same identity, install RC with `adb install -r`, and never uninstall to conceal a signer mismatch.
+Only after a secure Mode A or Mode B implementation succeeds:
 
+1. replace the pending public values in this document with the alias, subject, SHA-256 fingerprint, algorithm, validity, initialization date, and lineage status;
+2. publish only `Vitalis-production-signing-public-metadata`, containing `signing-public-metadata.txt` and the statement `PRIVATE KEY NOT INCLUDED`;
+3. verify the production APK certificate matches this document;
+4. add the permanent warning: **DO NOT REPLACE THIS CERTIFICATE FOR FUTURE UPDATES.**
+
+No `.jks`, `.keystore`, Base64 keystore, password file, or private key may be uploaded as a normal artifact.
+
+## Production build and upgrade continuity
+
+After the identity, production secrets, and recovery gate are established, manually run `Vitalis Android quality gates` on `agent/vitalis-3.15-rc-validation` with `build_production = true`.
+
+The production job must publish `Vitalis-3.15.0-rc1-production-signed`, and its certificate SHA-256 must match this document. It must not be `CN=Android Debug`.
+
+Only then may a controlled versionCode 20 baseline be built from the verified pre-RC source with the same certificate. The phone upgrade must install versionCode 21 over versionCode 20 without uninstalling. The no-shell procedure is recorded in `VITALIS_PHYSICAL_ACCEPTANCE_CHECKLIST.md`.

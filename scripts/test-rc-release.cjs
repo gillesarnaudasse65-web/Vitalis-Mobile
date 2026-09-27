@@ -61,10 +61,40 @@ test('production signing identity documentation contains no secret value and req
   assert.match(identity, /FIRST STABLE VITALIS PRODUCTION IDENTITY/);
   assert.match(identity, /vitalis-production/);
   assert.match(identity, /RSA 4096/);
-  assert.match(identity, /Backup A/);
-  assert.match(identity, /Backup B/);
-  assert.match(identity, /Password vault/);
-  assert.match(identity, /NOT CONFIRMED/);
+  assert.match(identity, /BACKUP_BLOCKED/);
+  assert.match(identity, /GitHub Secrets are not a user-downloadable backup vault/);
   assert.match(identity, /VITALIS_KEYSTORE_BASE64/);
   assert.doesNotMatch(identity, /BEGIN (?:RSA )?PRIVATE KEY/);
+});
+
+test('GitHub-only signing initialization is manual, protected, fail-closed, and artifact-safe', () => {
+  const workflow = read('.github/workflows/initialize-production-signing.yml');
+  const inputs = workflow.split('    inputs:')[1].split('\npermissions:')[0];
+  assert.match(workflow, /^name: Initialize Vitalis Production Signing/m);
+  assert.match(workflow, /workflow_dispatch:/);
+  assert.doesNotMatch(workflow, /^\s{2}(?:push|pull_request|schedule):/m);
+  assert.match(workflow, /environment: production-signing-init/);
+  assert.match(workflow, /confirm_first_identity != true/);
+  assert.match(workflow, /VITALIS_INIT_KEYSTORE_PASSWORD/);
+  assert.match(workflow, /VITALIS_INIT_KEY_PASSWORD/);
+  assert.match(workflow, /PRODUCTION SIGNING ALREADY INITIALIZED/);
+  assert.match(workflow, /INITIALIZATION BLOCKED — SECURE SECRET TRANSFER CHANNEL REQUIRED/);
+  assert.match(workflow, /if: always\(\)/);
+  assert.doesNotMatch(workflow, /actions\/upload-artifact/);
+  assert.doesNotMatch(workflow, /keytool -genkeypair/);
+  assert.doesNotMatch(inputs, /password/i);
+});
+
+test('physical acceptance checklist provides a no-shell in-place upgrade matrix', () => {
+  const checklist = read('docs/VITALIS_PHYSICAL_ACCEPTANCE_CHECKLIST.md');
+  assert.match(checklist, /No terminal, ADB, Android Studio, PowerShell, Command Prompt, or Bash is required/);
+  assert.match(checklist, /without uninstalling/);
+  for (const area of [
+    'Install', 'Upgrade', 'Themes', 'Widgets', 'Drag and drop', 'Health Connect',
+    'Scanner', 'Camera', 'Microphone', 'Text-to-speech', 'Offline',
+    'Export and import', 'Privacy', 'API key settings', 'Restart and persistence'
+  ]) {
+    assert.match(checklist, new RegExp(`## \\d+\\. ${area}`));
+  }
+  assert.match(checklist, /PHYSICAL ACCEPTANCE NOT TESTED/);
 });

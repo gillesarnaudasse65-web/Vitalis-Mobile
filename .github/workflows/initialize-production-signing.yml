@@ -1,0 +1,112 @@
+name: Initialize Vitalis Production Signing
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm_first_identity:
+        description: Establish the first permanent Android production-signing lineage for com.vitalis.healthos
+        required: true
+        default: false
+        type: boolean
+      certificate_common_name:
+        description: Public certificate common name
+        required: true
+        default: Vitalis Health OS
+        type: string
+      certificate_organization:
+        description: Public certificate organization
+        required: true
+        default: Vitalis
+        type: string
+      certificate_org_unit:
+        description: Public certificate organizational unit
+        required: true
+        default: Mobile
+        type: string
+      certificate_city:
+        description: Public certificate city
+        required: true
+        default: Abidjan
+        type: string
+      certificate_state:
+        description: Public certificate state or region
+        required: true
+        default: Abidjan
+        type: string
+      certificate_country:
+        description: Two-letter public certificate country code
+        required: true
+        default: CI
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: vitalis-production-signing-initialization
+  cancel-in-progress: false
+
+jobs:
+  secure_transfer_preflight:
+    name: Secure signing initialization preflight
+    runs-on: ubuntu-latest
+    environment: production-signing-init
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Require explicit first-lineage confirmation
+        if: ${{ inputs.confirm_first_identity != true }}
+        run: |
+          echo "This operation establishes the permanent Android production-signing lineage for com.vitalis.healthos." >&2
+          echo "Set confirm_first_identity to true only after reviewing the recovery requirements." >&2
+          exit 1
+
+      - name: Prevent accidental re-initialization
+        run: |
+          set -euo pipefail
+          if ! grep -Fq 'Status: **PENDING SECURE INITIALIZATION**' docs/VITALIS_SIGNING_IDENTITY.md; then
+            echo "PRODUCTION SIGNING ALREADY INITIALIZED" >&2
+            echo "The public signing marker is no longer pending. Refusing to generate a replacement identity." >&2
+            exit 1
+          fi
+
+      - name: Require protected initialization password secrets
+        env:
+          VITALIS_INIT_KEYSTORE_PASSWORD: ${{ secrets.VITALIS_INIT_KEYSTORE_PASSWORD }}
+          VITALIS_INIT_KEY_PASSWORD: ${{ secrets.VITALIS_INIT_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [ -z "$VITALIS_INIT_KEYSTORE_PASSWORD" ] || [ -z "$VITALIS_INIT_KEY_PASSWORD" ]; then
+            echo "Required production-signing initialization secrets are missing." >&2
+            exit 1
+          fi
+
+      - name: Stop before permanent key creation when no secure transfer channel exists
+        run: |
+          set -euo pipefail
+          {
+            echo "# Vitalis production-signing initialization"
+            echo
+            echo "INITIALIZATION BLOCKED — SECURE SECRET TRANSFER CHANNEL REQUIRED"
+            echo
+            echo "Mode C is active. No permanent keystore was generated."
+            echo "A dedicated secret-writing token or configured external vault must be approved before initialization can proceed."
+            echo "GitHub Secrets alone are not a user-downloadable recovery backup."
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "INITIALIZATION BLOCKED — SECURE SECRET TRANSFER CHANNEL REQUIRED" >&2
+          exit 1
+
+      - name: Remove any temporary signing material
+        if: always()
+        run: |
+          rm -f \
+            "$RUNNER_TEMP/vitalis-production.jks" \
+            "$RUNNER_TEMP/vitalis-production.jks.base64" \
+            "$RUNNER_TEMP/vitalis-signing-passwords.txt"
