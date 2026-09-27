@@ -191,6 +191,8 @@ jobs:
             grep -q 'OK (1 test)' upgrade-verify.txt
             cat upgrade-seed.txt upgrade-verify.txt > upgrade-continuity.txt
             ./gradlew --no-daemon connectedDebugAndroidTest
+            mkdir -p ux-screenshots
+            adb pull /sdcard/Android/data/com.vitalis.healthos/files/screenshots/. ux-screenshots/
             VITALIS_USE_DEBUG_RELEASE_SIGNING=true ./gradlew --no-daemon assembleRelease
             adb install -r app/build/outputs/apk/release/app-release.apk
             adb shell am start -W -n com.vitalis.healthos/.MainActivity > release-smoke.txt
@@ -206,5 +208,6 @@ jobs:
             app/build/outputs/androidTest-results/
             release-smoke.txt
             upgrade-continuity.txt
+            ux-screenshots/
           if-no-files-found: warn
           retention-days: 90
