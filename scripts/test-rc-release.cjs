@@ -26,7 +26,9 @@ test('release signing remains secret-driven and fails closed by default', () => 
 });
 
 test('test-signed RC output is explicitly prohibited from production distribution', () => {
-  assert.match(read('.github/workflows/build-apk.yml'), /NOT FOR PRODUCTION DISTRIBUTION/);
+  const workflow = read('.github/workflows/build-apk.yml');
+  assert.match(workflow, /Vitalis-3\.15\.0-rc1-qa-test-signed/);
+  assert.match(workflow, /NOT FOR PRODUCTION DISTRIBUTION/);
 });
 
 test('RC release workflow verifies signatures and emits SHA-256 checksums', () => {
@@ -35,6 +37,19 @@ test('RC release workflow verifies signatures and emits SHA-256 checksums', () =
   assert.match(workflow, /verify --verbose --print-certs/);
   assert.match(workflow, /jarsigner -verify -verbose -certs/);
   assert.match(workflow, /sha256sum/);
+});
+
+test('production release is manual protected fail-closed and removes temporary key material', () => {
+  const workflow = read('.github/workflows/build-apk.yml');
+  const production = workflow.split('  production_release:')[1].split('\n  emulator:')[0];
+  assert.match(workflow, /production_release:/);
+  assert.match(workflow, /environment: production/);
+  assert.match(workflow, /test -n "\$VITALIS_KEYSTORE_BASE64"/);
+  assert.match(workflow, /test -n "\$VITALIS_KEYSTORE_PASSWORD"/);
+  assert.match(workflow, /test -n "\$VITALIS_KEY_ALIAS"/);
+  assert.match(workflow, /test -n "\$VITALIS_KEY_PASSWORD"/);
+  assert.match(workflow, /rm -f "\$RUNNER_TEMP\/vitalis-production\.jks"/);
+  assert.doesNotMatch(production, /VITALIS_USE_DEBUG_RELEASE_SIGNING/);
 });
 
 test('privacy policy remains a draft requiring legal review', () => {

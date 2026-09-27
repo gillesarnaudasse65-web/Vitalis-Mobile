@@ -2,6 +2,12 @@ name: Vitalis Android quality gates
 
 on:
   workflow_dispatch:
+    inputs:
+      build_production:
+        description: Build with the protected Vitalis production signing identity
+        required: true
+        default: false
+        type: boolean
   pull_request:
     branches:
       - main
@@ -78,7 +84,7 @@ jobs:
           retention-days: 90
 
   release:
-    name: Minified release APK and AAB
+    name: Minified QA APK and AAB (test signed)
     needs: build
     runs-on: ubuntu-latest
     timeout-minutes: 35
@@ -95,34 +101,7 @@ jobs:
         uses: android-actions/setup-android@v4
       - name: Set up Gradle cache
         uses: gradle/actions/setup-gradle@v4
-      - name: Prepare optional production signing material
-        env:
-          VITALIS_KEYSTORE_BASE64: ${{ secrets.VITALIS_KEYSTORE_BASE64 }}
-          VITALIS_KEYSTORE_PASSWORD: ${{ secrets.VITALIS_KEYSTORE_PASSWORD }}
-          VITALIS_KEY_ALIAS: ${{ secrets.VITALIS_KEY_ALIAS }}
-          VITALIS_KEY_PASSWORD: ${{ secrets.VITALIS_KEY_PASSWORD }}
-        run: |
-          if [ -n "$VITALIS_KEYSTORE_BASE64" ]; then
-            test -n "$VITALIS_KEYSTORE_PASSWORD"
-            test -n "$VITALIS_KEY_ALIAS"
-            test -n "$VITALIS_KEY_PASSWORD"
-            printf '%s' "$VITALIS_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/vitalis-release.jks"
-            echo "VITALIS_SIGNING_AVAILABLE=true" >> "$GITHUB_ENV"
-            echo "VITALIS_SIGNING_LABEL=production-signed" >> "$GITHUB_ENV"
-          else
-            echo "VITALIS_SIGNING_AVAILABLE=false" >> "$GITHUB_ENV"
-            echo "VITALIS_SIGNING_LABEL=test-signed" >> "$GITHUB_ENV"
-          fi
-      - name: Assemble production-signed release APK and AAB
-        if: env.VITALIS_SIGNING_AVAILABLE == 'true'
-        env:
-          VITALIS_KEYSTORE_PATH: ${{ runner.temp }}/vitalis-release.jks
-          VITALIS_KEYSTORE_PASSWORD: ${{ secrets.VITALIS_KEYSTORE_PASSWORD }}
-          VITALIS_KEY_ALIAS: ${{ secrets.VITALIS_KEY_ALIAS }}
-          VITALIS_KEY_PASSWORD: ${{ secrets.VITALIS_KEY_PASSWORD }}
-        run: ./gradlew --no-daemon assembleRelease bundleRelease
-      - name: Assemble test-signed release APK and AAB
-        if: env.VITALIS_SIGNING_AVAILABLE == 'false'
+      - name: Assemble test-signed QA APK and AAB
         env:
           VITALIS_USE_DEBUG_RELEASE_SIGNING: 'true'
         run: ./gradlew --no-daemon assembleRelease bundleRelease
@@ -142,8 +121,8 @@ jobs:
           test -x "$APKSIGNER_PATH"
           {
             echo "Vitalis 3.15.0-rc1"
-            echo "Signing label: $VITALIS_SIGNING_LABEL"
-            echo "Distribution status: $([ "$VITALIS_SIGNING_AVAILABLE" = true ] && echo PRODUCTION_CANDIDATE || echo 'NOT FOR PRODUCTION DISTRIBUTION')"
+            echo "Signing label: test-signed"
+            echo "Distribution status: NOT FOR PRODUCTION DISTRIBUTION"
             echo
             echo "APK signer verification"
             "$APKSIGNER_PATH" verify --verbose --print-certs app/build/outputs/apk/release/app-release.apk
@@ -159,7 +138,7 @@ jobs:
       - name: Upload release candidate artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: Vitalis-3.15.0-rc1-${{ env.VITALIS_SIGNING_LABEL }}
+          name: Vitalis-3.15.0-rc1-qa-test-signed
           path: |
             app/build/outputs/apk/release/app-release.apk
             app/build/outputs/bundle/release/app-release.aab
@@ -167,6 +146,79 @@ jobs:
             app/build/distributions/vitalis-sha256.txt
             app/build/distributions/vitalis-signature-report.txt
             app/build/distributions/vitalis-artifact-sizes.txt
+            docs/RELEASE_NOTES_3_15_0_RC1.md
+          if-no-files-found: error
+          retention-days: 90
+
+  production_release:
+    name: Production-signed RC APK and AAB
+    if: github.event_name == 'workflow_dispatch' && inputs.build_production == true
+    needs: build
+    runs-on: ubuntu-latest
+    environment: production
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify Gradle wrapper
+        uses: gradle/actions/wrapper-validation@v4
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v4
+      - name: Set up Gradle cache
+        uses: gradle/actions/setup-gradle@v4
+      - name: Require protected production signing material
+        env:
+          VITALIS_KEYSTORE_BASE64: ${{ secrets.VITALIS_KEYSTORE_BASE64 }}
+          VITALIS_KEYSTORE_PASSWORD: ${{ secrets.VITALIS_KEYSTORE_PASSWORD }}
+          VITALIS_KEY_ALIAS: ${{ secrets.VITALIS_KEY_ALIAS }}
+          VITALIS_KEY_PASSWORD: ${{ secrets.VITALIS_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          test -n "$VITALIS_KEYSTORE_BASE64"
+          test -n "$VITALIS_KEYSTORE_PASSWORD"
+          test -n "$VITALIS_KEY_ALIAS"
+          test -n "$VITALIS_KEY_PASSWORD"
+          printf '%s' "$VITALIS_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/vitalis-production.jks"
+          chmod 600 "$RUNNER_TEMP/vitalis-production.jks"
+      - name: Assemble production-signed RC APK and AAB
+        env:
+          VITALIS_KEYSTORE_PATH: ${{ runner.temp }}/vitalis-production.jks
+          VITALIS_KEYSTORE_PASSWORD: ${{ secrets.VITALIS_KEYSTORE_PASSWORD }}
+          VITALIS_KEY_ALIAS: ${{ secrets.VITALIS_KEY_ALIAS }}
+          VITALIS_KEY_PASSWORD: ${{ secrets.VITALIS_KEY_PASSWORD }}
+        run: ./gradlew --no-daemon assembleRelease bundleRelease
+      - name: Verify production signatures and checksums
+        run: |
+          set -euo pipefail
+          mkdir -p app/build/distributions
+          APKSIGNER_PATH="$(find "$ANDROID_HOME/build-tools" -type f -name apksigner -print | sort -V | tail -n 1)"
+          test -x "$APKSIGNER_PATH"
+          "$APKSIGNER_PATH" verify --verbose --print-certs app/build/outputs/apk/release/app-release.apk \
+            > app/build/distributions/vitalis-production-signature.txt
+          jarsigner -verify -verbose -certs app/build/outputs/bundle/release/app-release.aab \
+            >> app/build/distributions/vitalis-production-signature.txt
+          sha256sum \
+            app/build/outputs/apk/release/app-release.apk \
+            app/build/outputs/bundle/release/app-release.aab \
+            app/build/outputs/mapping/release/mapping.txt \
+            > app/build/distributions/vitalis-production-sha256.txt
+      - name: Remove temporary production keystore
+        if: always()
+        run: rm -f "$RUNNER_TEMP/vitalis-production.jks"
+      - name: Upload production candidate artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: Vitalis-3.15.0-rc1-production-signed
+          path: |
+            app/build/outputs/apk/release/app-release.apk
+            app/build/outputs/bundle/release/app-release.aab
+            app/build/outputs/mapping/release/mapping.txt
+            app/build/distributions/vitalis-production-signature.txt
+            app/build/distributions/vitalis-production-sha256.txt
             docs/RELEASE_NOTES_3_15_0_RC1.md
           if-no-files-found: error
           retention-days: 90

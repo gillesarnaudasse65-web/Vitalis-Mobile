@@ -76,3 +76,11 @@ Google Play preparation is tracked in `VITALIS_GOOGLE_PLAY_CHECKLIST.md`; no pub
 ## Current decision
 
 **RC FAIL** until the P0/P1 external release gates above are completed. This status does not imply an observed software regression; it applies the mandatory decision rule without inventing signing or physical-device evidence.
+
+## RC blocker-clearance continuation
+
+Previous RC decision: **RC FAIL**.
+
+New decision: **RC FAIL**.
+
+The owner confirmed this will be Vitalis's first production signing lineage and that a physical Android device is available. CI now separates QA test signing from a protected, manual, fail-closed production-signing job. The decision has not changed because the permanent key has not yet been created through a recoverable secret-storage route, backup is not confirmed, physical acceptance has not been executed, and the same-certificate versionCode 20 → 21 upgrade remains untested. See `VITALIS_RC_BLOCKER_CLEARANCE.md`.
