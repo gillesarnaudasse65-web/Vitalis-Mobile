@@ -107,8 +107,13 @@ class MainActivity : ComponentActivity() {
     private var lastHealthPayload = JSONObject()
     private var textToSpeech: TextToSpeech? = null
     private var textToSpeechReady = false
+    private val ttsSessionCoordinator = TtsSessionCoordinator()
     private var speechRecognizer: SpeechRecognizer? = null
     private var microphoneEnabled = false
+    private val recognitionSessionCoordinator = RecognitionSessionCoordinator()
+    private val voiceHandler = Handler(Looper.getMainLooper())
+    private var pendingVoiceRetry: Runnable? = null
+    private var lastHealthConnectPermissionGranted = false
     private lateinit var dateState: SelectedDateState
     private var selectedHealthDate: LocalDate
         get() = dateState.selected
@@ -206,8 +211,21 @@ class MainActivity : ComponentActivity() {
     private val microphonePermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { granted ->
-        if (granted) startMicrophoneInternal()
-        else dispatchVoiceEvent("microphone", "permission_denied", false)
+        val sessionId = recognitionSessionCoordinator.snapshot().sessionId
+            ?: return@registerForActivityResult
+        if (granted) {
+            recognitionSessionCoordinator.permissionGranted(sessionId)
+            startMicrophoneInternal(sessionId)
+        } else {
+            microphoneEnabled = false
+            val permanentlyDenied = !shouldShowRequestPermissionRationale(Manifest.permission.RECORD_AUDIO)
+            recognitionSessionCoordinator.permissionDenied(sessionId, permanentlyDenied)
+            dispatchVoiceEvent(
+                "microphone",
+                if (permanentlyDenied) "permission_permanently_denied" else "permission_denied",
+                false
+            )
+        }
     }
 
     private val permissionLauncher = registerForActivityResult(
@@ -217,6 +235,7 @@ class MainActivity : ComponentActivity() {
             putBoolean(HEALTH_PERMISSION_REQUESTED_KEY, true)
             if (granted.isNotEmpty()) putBoolean(HEALTH_PERMISSION_EVER_AUTHORIZED_KEY, true)
         }
+        lastHealthConnectPermissionGranted = granted.intersect(healthPermissions).isNotEmpty()
         val allGranted = granted.containsAll(healthPermissions)
         notifyWeb(
             allGranted,
@@ -242,11 +261,13 @@ class MainActivity : ComponentActivity() {
                     ?.let(Uri::parse)
             }
         }
-        val deviceClock = if (BuildConfig.DEBUG && (
-                intent.getBooleanExtra(EXTRA_RUN2_FIXTURE, false) ||
-                    intent.getBooleanExtra(EXTRA_RUN3_FIXTURE, false) ||
-                    intent.getBooleanExtra(EXTRA_RUN4_FIXTURE, false)
-                )) {
+        val debugFixture = BuildConfig.DEBUG && (
+            intent.getBooleanExtra(EXTRA_RUN2_FIXTURE, false) ||
+                intent.getBooleanExtra(EXTRA_RUN3_FIXTURE, false) ||
+                intent.getBooleanExtra(EXTRA_RUN4_FIXTURE, false) ||
+                intent.getBooleanExtra(EXTRA_RUN5_FIXTURE, false)
+            )
+        val deviceClock = if (debugFixture) {
             val fixed = BridgeInputPolicy.date(intent.getStringExtra(EXTRA_TEST_TODAY_ISO))
             fixed?.let { Clock.fixed(it.atStartOfDay(java.time.ZoneId.systemDefault()).toInstant(),
                 java.time.ZoneId.systemDefault()) } ?: Clock.systemDefaultZone()
@@ -268,7 +289,13 @@ class MainActivity : ComponentActivity() {
                 ?.takeIf(NutritionIds::valid)
                 ?.let(::restoreNutritionSession)
         }
-        dateState = SelectedDateState(deviceClock, appPreferences.getString(SELECTED_HEALTH_DATE_KEY, null)) {
+        // Instrumentation classes share the debug app's preferences. A previous fixture can
+        // finish its WebView callbacks after the next class clears the date, especially across
+        // midnight. Start each new fixture from its injected clock; recreation still restores
+        // the date selected inside that same scenario.
+        val restoredDate = if (debugFixture && savedInstanceState == null) null
+            else appPreferences.getString(SELECTED_HEALTH_DATE_KEY, null)
+        dateState = SelectedDateState(deviceClock, restoredDate) {
             appPreferences.edit { putString(SELECTED_HEALTH_DATE_KEY, it) }
         }
         window.statusBarColor = Color.parseColor("#063C30")
@@ -420,6 +447,8 @@ class MainActivity : ComponentActivity() {
                     LOCAL_RUN3_TEST_URL
                 BuildConfig.DEBUG && intent.getBooleanExtra(EXTRA_RUN4_FIXTURE, false) ->
                     LOCAL_RUN4_TEST_URL
+                BuildConfig.DEBUG && intent.getBooleanExtra(EXTRA_RUN5_FIXTURE, false) ->
+                    LOCAL_RUN5_TEST_URL
                 BuildConfig.DEBUG && intent.getBooleanExtra(EXTRA_FORCE_OFFLINE_FOR_TESTS, false) -> LOCAL_URL
                 else -> VITALIS_URL
             })
@@ -430,7 +459,8 @@ class MainActivity : ComponentActivity() {
         if (!(BuildConfig.DEBUG && (intent.getBooleanExtra(EXTRA_FORCE_OFFLINE_FOR_TESTS, false) ||
                     intent.getBooleanExtra(EXTRA_RUN2_FIXTURE, false) ||
                     intent.getBooleanExtra(EXTRA_RUN3_FIXTURE, false) ||
-                    intent.getBooleanExtra(EXTRA_RUN4_FIXTURE, false))))
+                    intent.getBooleanExtra(EXTRA_RUN4_FIXTURE, false) ||
+                    intent.getBooleanExtra(EXTRA_RUN5_FIXTURE, false))))
             scheduleClassicInterfaceTimeout()
 
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
@@ -522,6 +552,12 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    override fun onStop() {
+        stopMicrophone("activity_background", cancelled = true)
+        stopSpeaking("activity_background")
+        super.onStop()
+    }
+
     override fun onDestroy() {
         activeNutritionAnalysisJob?.cancel()
         activeNutritionAnalysisJob = null
@@ -530,12 +566,13 @@ class MainActivity : ComponentActivity() {
         pendingNutritionCameraUri = null
         filePathCallback?.onReceiveValue(null)
         filePathCallback = null
-        stopMicrophone()
+        stopMicrophone("activity_destroyed", cancelled = true)
         speechRecognizer?.destroy()
         speechRecognizer = null
-        textToSpeech?.stop()
+        stopSpeaking("activity_destroyed")
         textToSpeech?.shutdown()
         textToSpeech = null
+        ttsSessionCoordinator.destroy()
         if (::webView.isInitialized) webView.destroy()
         super.onDestroy()
     }
@@ -608,6 +645,10 @@ class MainActivity : ComponentActivity() {
 
         @JavascriptInterface
         fun getConnectorStatus(): String = buildConnectorPayload(lastSourcePackages).toString()
+
+        @JavascriptInterface
+        fun getRun5FixtureResult(): String =
+            if (isRun5Fixture()) buildRun5FixtureResult().toString() else "{}"
 
         @JavascriptInterface
         fun authorizeConnector(connectorId: String) {
@@ -762,10 +803,7 @@ class MainActivity : ComponentActivity() {
 
         @JavascriptInterface
         fun stopSpeaking() {
-            runOnUiThread {
-                textToSpeech?.stop()
-                dispatchVoiceEvent("speech", "stopped", false)
-            }
+            runOnUiThread { this@MainActivity.stopSpeaking("user_stop") }
         }
 
         @JavascriptInterface
@@ -773,7 +811,10 @@ class MainActivity : ComponentActivity() {
 
         @JavascriptInterface
         fun setMicrophoneEnabled(enabled: Boolean) {
-            runOnUiThread { if (enabled) startMicrophone() else stopMicrophone() }
+            runOnUiThread {
+                if (enabled) startMicrophone()
+                else stopMicrophone("user_stop", cancelled = true)
+            }
         }
 
         @JavascriptInterface
@@ -786,7 +827,7 @@ class MainActivity : ComponentActivity() {
 
         @JavascriptInterface
         fun stopVoiceInput() {
-            runOnUiThread { stopMicrophone() }
+            runOnUiThread { stopMicrophone("user_stop", cancelled = true) }
         }
 
         @JavascriptInterface
@@ -823,20 +864,27 @@ class MainActivity : ComponentActivity() {
     private fun initializeVoiceServices() {
         textToSpeech = TextToSpeech(this) { status ->
             textToSpeechReady = status == TextToSpeech.SUCCESS
+            ttsSessionCoordinator.initialized(textToSpeechReady)
             if (textToSpeechReady) {
                 textToSpeech?.language = Locale.FRENCH
                 textToSpeech?.setSpeechRate(0.96f)
                 textToSpeech?.setPitch(1.0f)
                 textToSpeech?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
                     override fun onStart(utteranceId: String?) {
-                        dispatchVoiceEvent("speech", "speaking", true)
+                        if (ttsSessionCoordinator.started(utteranceId)) {
+                            dispatchVoiceEvent("speech", "speaking", true)
+                        }
                     }
                     override fun onDone(utteranceId: String?) {
-                        dispatchVoiceEvent("speech", "complete", false)
+                        if (ttsSessionCoordinator.completed(utteranceId)) {
+                            dispatchVoiceEvent("speech", "complete", false)
+                        }
                     }
                     @Deprecated("Deprecated in Java")
                     override fun onError(utteranceId: String?) {
-                        dispatchVoiceEvent("speech", "error", false)
+                        if (ttsSessionCoordinator.failed(utteranceId)) {
+                            dispatchVoiceEvent("speech", "error", false)
+                        }
                     }
                 })
                 dispatchVoiceEvent("speech", "ready", false)
@@ -857,51 +905,119 @@ class MainActivity : ComponentActivity() {
             else -> Locale.getDefault()
         }
         val engine = textToSpeech ?: return
-        val availability = engine.setLanguage(locale)
-        if (availability == TextToSpeech.LANG_MISSING_DATA || availability == TextToSpeech.LANG_NOT_SUPPORTED) engine.language = Locale.FRENCH
+        var availability = engine.setLanguage(locale)
+        var usedFallbackLocale = false
+        if (availability == TextToSpeech.LANG_MISSING_DATA || availability == TextToSpeech.LANG_NOT_SUPPORTED) {
+            usedFallbackLocale = true
+            availability = engine.setLanguage(Locale.FRENCH)
+        }
+        if (availability == TextToSpeech.LANG_MISSING_DATA || availability == TextToSpeech.LANG_NOT_SUPPORTED) {
+            ttsSessionCoordinator.initialized(false)
+            dispatchVoiceEvent("speech", "unsupported_locale", false)
+            return
+        }
         engine.setSpeechRate(0.96f)
         engine.setPitch(1.0f)
-        engine.speak(cleanText, TextToSpeech.QUEUE_FLUSH, null, "vitalis-${System.currentTimeMillis()}")
+        val utteranceId = "vitalis-${UUID.randomUUID()}"
+        ttsSessionCoordinator.begin(utteranceId, usedFallbackLocale)
+        val result = engine.speak(cleanText, TextToSpeech.QUEUE_FLUSH, null, utteranceId)
+        if (result == TextToSpeech.ERROR) {
+            ttsSessionCoordinator.failed(utteranceId)
+            dispatchVoiceEvent("speech", "error", false)
+        }
     }
 
     private fun startMicrophone() {
+        stopMicrophone("newer_session", cancelled = true)
+        val session = recognitionSessionCoordinator.requestStart()
+        val sessionId = session.sessionId ?: return
+        dispatchVoiceEvent("microphone", "requesting_permission", false)
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
             microphonePermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
             return
         }
-        startMicrophoneInternal()
+        recognitionSessionCoordinator.permissionGranted(sessionId)
+        startMicrophoneInternal(sessionId)
     }
 
-    private fun startMicrophoneInternal() {
+    private fun startMicrophoneInternal(sessionId: String) {
+        if (!recognitionSessionCoordinator.isCurrent(sessionId)) return
         if (!SpeechRecognizer.isRecognitionAvailable(this)) {
             microphoneEnabled = false
+            recognitionSessionCoordinator.markUnavailable(sessionId)
             dispatchVoiceEvent("microphone", "unavailable", false)
             return
         }
-        if (speechRecognizer == null) {
-            speechRecognizer = SpeechRecognizer.createSpeechRecognizer(this).apply {
-                setRecognitionListener(object : RecognitionListener {
-                    override fun onReadyForSpeech(params: Bundle?) = dispatchVoiceEvent("microphone", "ready", true)
-                    override fun onBeginningOfSpeech() = dispatchVoiceEvent("microphone", "listening", true)
-                    override fun onRmsChanged(rmsdB: Float) = Unit
-                    override fun onBufferReceived(buffer: ByteArray?) = Unit
-                    override fun onEndOfSpeech() = dispatchVoiceEvent("microphone", "processing", true)
-                    override fun onError(error: Int) {
-                        val permanent = error == SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS || error == SpeechRecognizer.ERROR_CLIENT
-                        dispatchVoiceEvent("microphone", "error_$error", microphoneEnabled)
-                        if (microphoneEnabled && !permanent) restartMicrophone(900L)
-                        else if (permanent) microphoneEnabled = false
-                    }
-                    override fun onResults(results: Bundle?) {
-                        dispatchSpeechResults(results, false)
-                        if (microphoneEnabled) restartMicrophone(500L)
-                    }
-                    override fun onPartialResults(partialResults: Bundle?) = dispatchSpeechResults(partialResults, true)
-                    override fun onEvent(eventType: Int, params: Bundle?) = Unit
-                })
-            }
+        pendingVoiceRetry?.let(voiceHandler::removeCallbacks)
+        pendingVoiceRetry = null
+        runCatching { speechRecognizer?.cancel() }
+        runCatching { speechRecognizer?.destroy() }
+        speechRecognizer = SpeechRecognizer.createSpeechRecognizer(this).apply {
+            setRecognitionListener(recognitionListener(sessionId))
         }
         microphoneEnabled = true
+        startRecognitionAttempt(sessionId)
+    }
+
+    private fun recognitionListener(sessionId: String) = object : RecognitionListener {
+        override fun onReadyForSpeech(params: Bundle?) {
+            if (recognitionSessionCoordinator.isCurrent(sessionId)) {
+                dispatchVoiceEvent("microphone", "ready", true)
+            }
+        }
+
+        override fun onBeginningOfSpeech() {
+            if (recognitionSessionCoordinator.markListening(sessionId)) {
+                dispatchVoiceEvent("microphone", "listening", true)
+            }
+        }
+
+        override fun onRmsChanged(rmsdB: Float) = Unit
+        override fun onBufferReceived(buffer: ByteArray?) = Unit
+
+        override fun onEndOfSpeech() {
+            if (recognitionSessionCoordinator.markProcessing(sessionId)) {
+                dispatchVoiceEvent("microphone", "processing_final", true)
+            }
+        }
+
+        override fun onError(error: Int) {
+            if (!recognitionSessionCoordinator.isCurrent(sessionId)) return
+            val action = recognitionSessionCoordinator.handleError(sessionId, recognitionErrorCategory(error))
+            dispatchVoiceEvent("microphone", "error_$error", false)
+            when (action) {
+                RecognitionErrorAction.RETRY -> scheduleMicrophoneRetry(sessionId, 700L)
+                RecognitionErrorAction.RETURN_TO_IDLE,
+                RecognitionErrorAction.END_SESSION -> {
+                    microphoneEnabled = false
+                    pendingVoiceRetry = null
+                }
+            }
+        }
+
+        override fun onResults(results: Bundle?) {
+            val matches = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION).orEmpty()
+            val text = matches.firstOrNull().orEmpty()
+            if (!recognitionSessionCoordinator.consumeFinal(sessionId, text)) return
+            dispatchSpeechResults(sessionId, matches, VoiceResultKind.FINAL)
+            microphoneEnabled = false
+            recognitionSessionCoordinator.finish(sessionId)
+            dispatchVoiceEvent("microphone", "idle", false)
+        }
+
+        override fun onPartialResults(partialResults: Bundle?) {
+            val matches = partialResults?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION).orEmpty()
+            val text = matches.firstOrNull().orEmpty()
+            if (recognitionSessionCoordinator.acceptPartial(sessionId, text)) {
+                dispatchSpeechResults(sessionId, matches, VoiceResultKind.PARTIAL)
+            }
+        }
+
+        override fun onEvent(eventType: Int, params: Bundle?) = Unit
+    }
+
+    private fun startRecognitionAttempt(sessionId: String) {
+        if (!recognitionSessionCoordinator.isCurrent(sessionId)) return
         val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
             putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
             putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
@@ -913,38 +1029,84 @@ class MainActivity : ComponentActivity() {
             dispatchVoiceEvent("microphone", "starting", true)
         }.onFailure {
             microphoneEnabled = false
+            recognitionSessionCoordinator.handleError(sessionId, RecognitionErrorCategory.FATAL)
             dispatchVoiceEvent("microphone", "start_failed", false)
         }
     }
 
-    private fun restartMicrophone(delayMillis: Long) {
-        Handler(Looper.getMainLooper()).postDelayed({ if (microphoneEnabled) startMicrophoneInternal() }, delayMillis)
+    private fun scheduleMicrophoneRetry(sessionId: String, delayMillis: Long) {
+        val retry = Runnable {
+            pendingVoiceRetry = null
+            if (microphoneEnabled && recognitionSessionCoordinator.isCurrent(sessionId)) {
+                startRecognitionAttempt(sessionId)
+            }
+        }
+        pendingVoiceRetry = retry
+        voiceHandler.postDelayed(retry, delayMillis)
     }
 
-    private fun stopMicrophone() {
+    private fun stopMicrophone(reason: String, cancelled: Boolean) {
+        pendingVoiceRetry?.let(voiceHandler::removeCallbacks)
+        pendingVoiceRetry = null
+        val sessionId = recognitionSessionCoordinator.snapshot().sessionId
+        recognitionSessionCoordinator.stop(sessionId, reason, cancelled)
         microphoneEnabled = false
         runCatching { speechRecognizer?.cancel() }
-        dispatchVoiceEvent("microphone", "off", false)
+        dispatchVoiceEvent("microphone", if (cancelled) "cancelled" else "stopped", false)
+        recognitionSessionCoordinator.finish(sessionId)
+        dispatchVoiceEvent("microphone", "idle", false)
     }
 
-    private fun dispatchSpeechResults(bundle: Bundle?, partial: Boolean) {
-        val matches = bundle?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION).orEmpty()
+    private fun recognitionErrorCategory(error: Int): RecognitionErrorCategory = when (error) {
+        SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS -> RecognitionErrorCategory.PERMISSION
+        SpeechRecognizer.ERROR_NO_MATCH,
+        SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> RecognitionErrorCategory.NO_SPEECH
+        SpeechRecognizer.ERROR_NETWORK,
+        SpeechRecognizer.ERROR_NETWORK_TIMEOUT,
+        SpeechRecognizer.ERROR_AUDIO -> RecognitionErrorCategory.RECOVERABLE
+        SpeechRecognizer.ERROR_SERVER,
+        SpeechRecognizer.ERROR_RECOGNIZER_BUSY -> RecognitionErrorCategory.SERVICE_UNAVAILABLE
+        else -> RecognitionErrorCategory.FATAL
+    }
+
+    private fun stopSpeaking(reason: String) {
+        textToSpeech?.stop()
+        ttsSessionCoordinator.stop()
+        dispatchVoiceEvent("speech", "stopped_$reason", false)
+        ttsSessionCoordinator.readyAfterStop()
+    }
+
+    private fun dispatchSpeechResults(
+        sessionId: String,
+        matches: List<String>,
+        kind: VoiceResultKind
+    ) {
         val payload = JSONObject().apply {
             put("text", matches.firstOrNull().orEmpty())
             put("alternatives", JSONArray(matches))
-            put("partial", partial)
+            put("partial", kind == VoiceResultKind.PARTIAL)
+            put("kind", kind.name)
+            put("sessionId", sessionId)
             put("microphoneEnabled", microphoneEnabled)
         }
         dispatchWebEvent("vitalis-voice-input", payload)
     }
 
     private fun dispatchVoiceEvent(type: String, status: String, active: Boolean) {
+        val recognition = recognitionSessionCoordinator.snapshot()
+        val speech = ttsSessionCoordinator.snapshot()
         val payload = JSONObject().apply {
             put("type", type)
             put("status", status)
             put("active", active)
             put("microphoneEnabled", microphoneEnabled)
             put("speaking", textToSpeech?.isSpeaking == true)
+            put("recognitionState", recognition.state.name)
+            put("recognitionSessionId", recognition.sessionId ?: JSONObject.NULL)
+            put("recognitionRetryCount", recognition.retryCount)
+            put("ttsState", speech.state.name)
+            put("utteranceId", speech.utteranceId ?: JSONObject.NULL)
+            put("ttsFallbackLocale", speech.fallbackLocaleUsed)
         }
         dispatchWebEvent("vitalis-voice-state", payload)
     }
@@ -1467,6 +1629,81 @@ class MainActivity : ComponentActivity() {
     private fun isRun4Fixture(): Boolean = BuildConfig.DEBUG &&
         intent.getBooleanExtra(EXTRA_RUN4_FIXTURE, false)
 
+    private fun isRun5Fixture(): Boolean = BuildConfig.DEBUG &&
+        intent.getBooleanExtra(EXTRA_RUN5_FIXTURE, false)
+
+    private fun buildRun5FixtureResult(): JSONObject {
+        val oneShot = RecognitionSessionCoordinator { "fixture-voice" }
+        oneShot.requestStart()
+        oneShot.permissionGranted("fixture-voice")
+        oneShot.markListening("fixture-voice")
+        val partialAccepted = oneShot.acceptPartial("fixture-voice", "partial fixture")
+        val firstFinalAccepted = oneShot.consumeFinal("fixture-voice", "final fixture")
+        val duplicateFinalRejected = !oneShot.consumeFinal("fixture-voice", "final fixture")
+
+        var sequence = 0
+        val ownership = RecognitionSessionCoordinator { "fixture-${++sequence}" }
+        ownership.requestStart()
+        ownership.permissionGranted("fixture-1")
+        ownership.markListening("fixture-1")
+        ownership.requestStart()
+        val staleFinalRejected = !ownership.consumeFinal("fixture-1", "stale fixture")
+
+        val cancelled = RecognitionSessionCoordinator { "fixture-cancel" }
+        cancelled.requestStart()
+        cancelled.permissionGranted("fixture-cancel")
+        cancelled.markListening("fixture-cancel")
+        cancelled.stop("fixture-cancel", "background", cancelled = true)
+        val cancelledFinalRejected = !cancelled.consumeFinal("fixture-cancel", "late fixture")
+
+        val retry = RecognitionSessionCoordinator { "fixture-retry" }
+        retry.requestStart()
+        retry.permissionGranted("fixture-retry")
+        retry.markListening("fixture-retry")
+        val firstRetry = retry.handleError(
+            "fixture-retry",
+            RecognitionErrorCategory.SERVICE_UNAVAILABLE
+        )
+        val secondRetry = retry.handleError(
+            "fixture-retry",
+            RecognitionErrorCategory.SERVICE_UNAVAILABLE
+        )
+
+        val tts = TtsSessionCoordinator().apply { initialized(true) }
+        tts.begin("fixture-tts-old", false)
+        tts.begin("fixture-tts-new", true)
+        val oldTtsCallbackRejected = !tts.completed("fixture-tts-old")
+        tts.stop()
+
+        fun connectorState(
+            id: String,
+            installed: Boolean,
+            permission: Boolean,
+            records: Boolean
+        ): String = ConnectorStateResolver.resolve(
+            requireNotNull(ConnectorCatalog.find(id)),
+            ConnectorEvidence(installed, true, permission, records)
+        ).name
+
+        return JSONObject().apply {
+            put("partialAccepted", partialAccepted)
+            put("firstFinalAccepted", firstFinalAccepted)
+            put("duplicateFinalRejected", duplicateFinalRejected)
+            put("staleFinalRejected", staleFinalRejected)
+            put("cancelledFinalRejected", cancelledFinalRejected)
+            put("firstRetry", firstRetry.name)
+            put("secondRetry", secondRetry.name)
+            put("oldTtsCallbackRejected", oldTtsCallbackRejected)
+            put("ttsStopped", tts.snapshot().state == TtsState.TTS_STOPPED)
+            put("permissionRequired", connectorState("samsung_health", true, false, false))
+            put("healthNoData", connectorState("samsung_health", true, true, false))
+            put("providerData", connectorState("samsung_health", true, true, true))
+            put("setupOnly", connectorState("fiton", true, false, false))
+            put("directUnavailable", connectorState("strava", true, false, false))
+            put("appleHealth", connectorState("apple_health", false, false, false))
+        }
+    }
+
     private fun saveLegacyMealEstimate(rawJson: String): Boolean {
         val source = runCatching { JSONObject(rawJson) }.getOrNull() ?: return false
         val scanId = source.optString("scanId")
@@ -1707,7 +1944,7 @@ class MainActivity : ComponentActivity() {
             }
             return
         }
-        if (definition.mode == "unsupported_android") {
+        if (definition.capability == ConnectorCapability.UNSUPPORTED_PLATFORM) {
             notifyWeb(
                 false,
                 "unsupported_android",
@@ -1715,7 +1952,7 @@ class MainActivity : ComponentActivity() {
             )
             return
         }
-        if (definition.mode == "health_connect" || definition.mode == "bridge") {
+        if (definition.capability == ConnectorCapability.HEALTH_CONNECT) {
             when (HealthConnectClient.getSdkStatus(this)) {
                 HealthConnectClient.SDK_AVAILABLE -> {
                     pendingConnectorId = definition.id
@@ -1726,6 +1963,18 @@ class MainActivity : ComponentActivity() {
             }
             return
         }
+        if (
+            definition.capability in setOf(
+                ConnectorCapability.DIRECT_OAUTH,
+                ConnectorCapability.DIRECT_API
+            ) && !definition.directIntegrationImplemented
+        ) {
+            notifyWeb(
+                false,
+                "direct_connection_not_implemented",
+                "Connexion directe non implémentée pour ${definition.name}. Vitalis peut seulement ouvrir l’application pour sa configuration."
+            )
+        }
         openInstalledConnector(definition)
     }
 
@@ -1733,25 +1982,28 @@ class MainActivity : ComponentActivity() {
         val packageName = definition.packages.firstOrNull(::isPackageInstalled)
         if (packageName != null) {
             val launchIntent = packageManager.getLaunchIntentForPackage(packageName)
-            if (launchIntent != null) {
+            if (launchIntent != null && runCatching { startActivity(launchIntent) }.isSuccess) {
                 refreshAfterConnectorReturn = true
-                startActivity(launchIntent)
                 notifyWeb(
                     true,
                     "connector_app_opened",
-                    if (definition.mode == "health_connect" || definition.mode == "bridge")
+                    if (definition.capability == ConnectorCapability.HEALTH_CONNECT)
                         "${definition.name} est ouvert. Activez son partage vers Health Connect, puis revenez dans Vitalis et actualisez."
                     else
-                        "${definition.name} est ouvert. Connectez-vous et activez l’intégration officielle proposée par ce fournisseur ; Vitalis ne contourne pas ses autorisations."
+                        "${definition.name} est ouvert pour sa configuration. Cela ne signifie pas que le fournisseur est connecté à Vitalis."
                 )
                 return
             }
         }
-        openConnectorStore(definition.name)
+        val storeOpened = openConnectorStore(definition.name)
         notifyWeb(
             false,
-            "connector_not_installed",
-            "${definition.name} n’a pas été détecté. La page d’installation est ouverte."
+            if (storeOpened) "connector_not_installed" else "connector_launch_failed",
+            if (storeOpened) {
+                "${definition.name} n’a pas été détecté ou n’a pas pu être ouvert. La page d’installation est ouverte."
+            } else {
+                "${definition.name} n’a pas pu être ouvert et aucune boutique compatible n’est disponible."
+            }
         )
     }
 
@@ -1761,12 +2013,15 @@ class MainActivity : ComponentActivity() {
         true
     }.getOrDefault(false)
 
-    private fun openConnectorStore(name: String) {
+    private fun openConnectorStore(name: String): Boolean {
         val query = Uri.encode(name)
-        try {
+        return try {
             startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("market://search?q=$query&c=apps")))
+            true
         } catch (_: ActivityNotFoundException) {
-            startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://play.google.com/store/search?q=$query&c=apps")))
+            runCatching {
+                startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://play.google.com/store/search?q=$query&c=apps")))
+            }.isSuccess
         }
     }
 
@@ -2024,6 +2279,18 @@ class MainActivity : ComponentActivity() {
             )
             return
         }
+        if (BuildConfig.DEBUG && intent.getBooleanExtra(EXTRA_RUN5_FIXTURE, false)) {
+            debugRefreshRequests.add(selectedDate.toString())
+            dispatchManualOnlyHealthData(
+                selectedDate,
+                HealthConnectStateModel(
+                    HealthConnectStateCode.NOT_SUPPORTED,
+                    "Fixture voix et connecteurs",
+                    reason = "run5_fixture"
+                )
+            )
+            return
+        }
         val client = healthConnectClient
         val dataSource = healthConnectDataSource
         if (client == null || dataSource == null) {
@@ -2038,6 +2305,7 @@ class MainActivity : ComponentActivity() {
             val granted = try {
                 client.permissionController.getGrantedPermissions()
             } catch (error: SecurityException) {
+                lastHealthConnectPermissionGranted = false
                 if (isCurrentHealthSync(generation)) {
                     appPreferences.edit {
                         putBoolean(HEALTH_PERMISSION_REQUESTED_KEY, true)
@@ -2056,6 +2324,7 @@ class MainActivity : ComponentActivity() {
                 }
                 return@launch
             }
+            lastHealthConnectPermissionGranted = granted.intersect(healthPermissions).isNotEmpty()
             val permissionState = healthPermissionState(granted)
             val hasAnyHealthPermission = granted.intersect(healthPermissions).isNotEmpty()
             if (!hasAnyHealthPermission) {
@@ -2627,21 +2896,22 @@ class MainActivity : ComponentActivity() {
         val catalogItems = connectorCatalog.map { definition ->
             val detected = definition.packages.firstOrNull { it in packages }
             val installed = definition.packages.firstOrNull(::isPackageInstalled)
+            val runtimeState = ConnectorStateResolver.resolve(
+                definition,
+                ConnectorEvidence(
+                    installed = installed != null,
+                    healthConnectAvailable = healthStatus == "available",
+                    healthConnectPermissionGranted = lastHealthConnectPermissionGranted,
+                    providerRecordsDetected = detected != null
+                )
+            )
             JSONObject().apply {
                 put("id", definition.id)
                 put("name", definition.name)
-                put(
-                    "status",
-                    when {
-                        definition.id == "health_connect" && healthStatus == "unavailable" -> "unavailable"
-                        definition.mode == "unsupported_android" -> "unsupported_android"
-                        detected != null -> "connected"
-                        installed != null -> "installed"
-                        definition.id == "health_connect" -> healthStatus
-                        else -> "not_installed"
-                    }
-                )
-                put("mode", definition.mode)
+                put("status", runtimeState.name.lowercase(Locale.US))
+                put("runtimeState", runtimeState.name)
+                put("capability", definition.capability.name)
+                put("mode", definition.capability.name.lowercase(Locale.US))
                 put("packageName", detected ?: installed ?: definition.packages.firstOrNull().orEmpty())
                 put("detectedData", detected != null)
                 put("installed", installed != null)
@@ -2649,24 +2919,35 @@ class MainActivity : ComponentActivity() {
                     "action",
                     when {
                         definition.id == "health_connect" -> "authorize_health_connect"
-                        definition.mode == "unsupported_android" -> "unsupported_android"
-                        installed != null && (definition.mode == "health_connect" || definition.mode == "bridge") ->
+                        definition.capability == ConnectorCapability.UNSUPPORTED_PLATFORM -> "unsupported_android"
+                        definition.capability == ConnectorCapability.HEALTH_CONNECT && installed != null ->
                             "authorize_via_health_connect"
                         installed != null -> "open_provider"
                         else -> "install_provider"
                     }
                 )
                 put("note", definition.note)
+                put("userFacingStatus", connectorRuntimeLabel(runtimeState))
+                put("directIntegrationImplemented", definition.directIntegrationImplemented)
+                put("futureRequirement", definition.futureRequirement ?: JSONObject.NULL)
             }
         }
         val catalogPackages = connectorCatalog.flatMap { it.packages }.toSet()
         val dynamicItems = packages.filterNot { it in catalogPackages }.map { packageName ->
-            connector(sourceLabel(packageName), "connected", "health_connect", packageName).apply {
+            JSONObject().apply {
                 put("id", packageName)
+                put("name", sourceLabel(packageName))
+                put("status", ConnectorRuntimeState.HEALTH_CONNECT_DATA_AVAILABLE.name.lowercase(Locale.US))
+                put("runtimeState", ConnectorRuntimeState.HEALTH_CONNECT_DATA_AVAILABLE.name)
+                put("capability", ConnectorCapability.HEALTH_CONNECT.name)
+                put("mode", ConnectorCapability.HEALTH_CONNECT.name.lowercase(Locale.US))
+                put("packageName", packageName)
                 put("detectedData", true)
                 put("installed", isPackageInstalled(packageName))
                 put("action", "manage_health_connect")
                 put("note", "Source détectée automatiquement dans Health Connect.")
+                put("userFacingStatus", "Données détectées via Health Connect")
+                put("directIntegrationImplemented", false)
             }
         }
         return JSONObject().apply {
@@ -2679,11 +2960,18 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun connector(name: String, status: String, mode: String, packageName: String) = JSONObject().apply {
-        put("name", name)
-        put("status", status)
-        put("mode", mode)
-        put("packageName", packageName)
+    private fun connectorRuntimeLabel(state: ConnectorRuntimeState): String = when (state) {
+        ConnectorRuntimeState.NOT_INSTALLED -> "Application non installée"
+        ConnectorRuntimeState.INSTALLED -> "Application installée"
+        ConnectorRuntimeState.SETUP_REQUIRED -> "Configuration requise dans l’application"
+        ConnectorRuntimeState.HEALTH_CONNECT_PERMISSION_REQUIRED -> "Autorisation Health Connect requise"
+        ConnectorRuntimeState.HEALTH_CONNECT_AVAILABLE_NO_DATA -> "Accès Health Connect activé, aucune donnée fournisseur détectée"
+        ConnectorRuntimeState.HEALTH_CONNECT_DATA_AVAILABLE -> "Données fournisseur détectées via Health Connect"
+        ConnectorRuntimeState.DIRECT_AUTH_REQUIRED -> "Autorisation directe requise"
+        ConnectorRuntimeState.DIRECT_AUTHENTICATED -> "Connexion directe authentifiée"
+        ConnectorRuntimeState.API_UNAVAILABLE -> "Connexion directe non implémentée"
+        ConnectorRuntimeState.UNSUPPORTED -> "Non pris en charge sur Android"
+        ConnectorRuntimeState.UNAVAILABLE -> "Indisponible sur cet appareil"
     }
 
     private fun dispatchSyncState(status: String, message: String? = null) {
@@ -2741,6 +3029,7 @@ class MainActivity : ComponentActivity() {
         internal const val EXTRA_RUN2_FIXTURE = "com.vitalis.healthos.RUN2_FIXTURE"
         internal const val EXTRA_RUN3_FIXTURE = "com.vitalis.healthos.RUN3_FIXTURE"
         internal const val EXTRA_RUN4_FIXTURE = "com.vitalis.healthos.RUN4_FIXTURE"
+        internal const val EXTRA_RUN5_FIXTURE = "com.vitalis.healthos.RUN5_FIXTURE"
         internal const val EXTRA_TEST_TODAY_ISO = "com.vitalis.healthos.TEST_TODAY_ISO"
         private const val SELECTED_HEALTH_DATE_KEY = "selected_health_date_iso"
         private const val HEALTH_PERMISSION_REQUESTED_KEY =
@@ -2755,6 +3044,8 @@ class MainActivity : ComponentActivity() {
             "https://$LOCAL_ASSET_HOST/assets/vitalis/run3-health-fixture.html"
         private const val LOCAL_RUN4_TEST_URL =
             "https://$LOCAL_ASSET_HOST/assets/vitalis/run4-nutrition-fixture.html"
+        private const val LOCAL_RUN5_TEST_URL =
+            "https://$LOCAL_ASSET_HOST/assets/vitalis/run5-voice-connectors-fixture.html"
         private const val VITALIS_HOST = "vitalis-health-os.gillesarnaudasse65.chatgpt.site"
         private const val VITALIS_URL = "https://$VITALIS_HOST/"
         private const val COACH_ASSET_PATH = "/__vitalis/coaches/"

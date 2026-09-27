@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Vitalis Run 5 voice and connector fixture</title>
+  <style>
+    body{font-family:system-ui;margin:24px;color:#173d32;background:#f7faf8}
+    button{padding:12px 16px;border:0;border-radius:12px;background:#063c30;color:white}
+    pre{white-space:pre-wrap;background:white;border:1px solid #d8e3de;padding:14px;border-radius:12px}
+  </style>
+</head>
+<body>
+  <h1>Voice and connector reliability</h1>
+  <button id="runFixture">Run deterministic fixture</button>
+  <pre id="fixtureResult">waiting</pre>
+  <script>
+    window.__run5Fixture=true;
+    document.getElementById("runFixture").onclick=function(){
+      var raw=window.VitalisAndroid&&window.VitalisAndroid.getRun5FixtureResult
+        ?window.VitalisAndroid.getRun5FixtureResult():"{}";
+      document.getElementById("fixtureResult").textContent=raw;
+    };
+  </script>
+</body>
+</html>

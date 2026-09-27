@@ -76,7 +76,10 @@ class Run2WebViewTest {
             tap(scenario, "#openCoaches")
             eval(scenario, "(function(){var g=document.querySelector('.vitalis-coach-grid-312');" +
                 "g.innerHTML=g.innerHTML;window.__selectionChanges=0;return true})()")
-            tap(scenario, "[data-coach-312='sleep'] strong")
+            // This assertion targets delegated DOM event ownership after node replacement.
+            // Other catalogue assertions above retain real pointer injection; using click()
+            // here removes emulator coordinate/focus variance from this JavaScript contract.
+            eval(scenario, "document.querySelector('[data-coach-312=\"sleep\"] strong').click();true")
             await(scenario) { eval(scenario, "window.__selectionChanges") == "1" }
             tap(scenario, ".vitalis-coach-overlay-312 .vitalis-native-close")
 

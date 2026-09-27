@@ -1,49 +1,143 @@
 package com.vitalis.healthos
 
+internal enum class ConnectorCapability {
+    HEALTH_CONNECT,
+    APP_SETUP_ONLY,
+    DIRECT_OAUTH,
+    DIRECT_API,
+    UNSUPPORTED_PLATFORM,
+    UNAVAILABLE
+}
+
+internal enum class ConnectorRuntimeState {
+    NOT_INSTALLED,
+    INSTALLED,
+    SETUP_REQUIRED,
+    HEALTH_CONNECT_PERMISSION_REQUIRED,
+    HEALTH_CONNECT_AVAILABLE_NO_DATA,
+    HEALTH_CONNECT_DATA_AVAILABLE,
+    DIRECT_AUTH_REQUIRED,
+    DIRECT_AUTHENTICATED,
+    API_UNAVAILABLE,
+    UNSUPPORTED,
+    UNAVAILABLE
+}
+
 internal data class ConnectorDefinition(
-        val id: String,
-        val name: String,
-        val packages: List<String>,
-        val mode: String,
-        val note: String
-    )
+    val id: String,
+    val name: String,
+    val packages: List<String>,
+    val capability: ConnectorCapability,
+    val note: String,
+    val directIntegrationImplemented: Boolean = false,
+    val futureRequirement: String? = null
+)
+
+internal data class ConnectorEvidence(
+    val installed: Boolean,
+    val healthConnectAvailable: Boolean,
+    val healthConnectPermissionGranted: Boolean,
+    val providerRecordsDetected: Boolean
+)
+
+internal object ConnectorStateResolver {
+    fun resolve(
+        definition: ConnectorDefinition,
+        evidence: ConnectorEvidence
+    ): ConnectorRuntimeState = when (definition.capability) {
+        ConnectorCapability.UNSUPPORTED_PLATFORM -> ConnectorRuntimeState.UNSUPPORTED
+        ConnectorCapability.UNAVAILABLE -> ConnectorRuntimeState.UNAVAILABLE
+        ConnectorCapability.HEALTH_CONNECT -> when {
+            evidence.providerRecordsDetected -> ConnectorRuntimeState.HEALTH_CONNECT_DATA_AVAILABLE
+            !evidence.healthConnectAvailable -> ConnectorRuntimeState.UNAVAILABLE
+            !evidence.healthConnectPermissionGranted ->
+                ConnectorRuntimeState.HEALTH_CONNECT_PERMISSION_REQUIRED
+            definition.id != "health_connect" && !evidence.installed ->
+                ConnectorRuntimeState.NOT_INSTALLED
+            else -> ConnectorRuntimeState.HEALTH_CONNECT_AVAILABLE_NO_DATA
+        }
+        ConnectorCapability.APP_SETUP_ONLY -> if (evidence.installed) {
+            ConnectorRuntimeState.SETUP_REQUIRED
+        } else {
+            ConnectorRuntimeState.NOT_INSTALLED
+        }
+        ConnectorCapability.DIRECT_OAUTH,
+        ConnectorCapability.DIRECT_API -> when {
+            !evidence.installed -> ConnectorRuntimeState.NOT_INSTALLED
+            !definition.directIntegrationImplemented -> ConnectorRuntimeState.API_UNAVAILABLE
+            else -> ConnectorRuntimeState.DIRECT_AUTH_REQUIRED
+        }
+    }
+}
 
 internal object ConnectorCatalog {
+    private const val OAUTH_REQUIREMENT =
+        "Developer account, client ID, redirect URI, authorization code exchange, refresh tokens, scopes, secure token storage and provider policy approval."
+
     val entries = listOf(
-        ConnectorDefinition("health_connect", "Health Connect", listOf("com.google.android.apps.healthdata"), "health_connect", "Autorisation Android native et centralisation des données."),
-        ConnectorDefinition("samsung_health", "Samsung Health", listOf("com.sec.android.app.shealth"), "health_connect", "Activez le partage Health Connect dans Samsung Health."),
-        ConnectorDefinition("google_fit", "Google Fit", listOf("com.google.android.apps.fitness"), "health_connect", "Utilisez Health Connect lorsque Google Fit le propose."),
-        ConnectorDefinition("mibro_fit", "Mibro Fit", listOf("com.xiaoxun.xunoversea", "com.zhencheng.mibrofit"), "bridge", "Le partage dépend de Mibro Fit, Google Fit ou Health Connect."),
-        ConnectorDefinition("fitbit", "Fitbit", listOf("com.fitbit.FitbitMobile"), "health_connect", "Activez Health Connect depuis les réglages Fitbit."),
-        ConnectorDefinition("garmin", "Garmin Connect", listOf("com.garmin.android.apps.connectmobile"), "provider", "Une autorisation Garmin officielle est requise si aucune donnée Health Connect n’est publiée."),
-        ConnectorDefinition("huawei", "Huawei Health", listOf("com.huawei.health"), "provider", "Une autorisation Huawei officielle est requise si aucune donnée Health Connect n’est publiée."),
-        ConnectorDefinition("strava", "Strava", listOf("com.strava"), "provider", "La connexion complète nécessite l’autorisation OAuth Strava."),
-        ConnectorDefinition("oura", "Oura", listOf("com.ouraring.oura"), "provider", "La connexion complète nécessite l’autorisation officielle Oura."),
-        ConnectorDefinition("whoop", "WHOOP", listOf("com.whoop.android"), "provider", "La connexion complète nécessite l’autorisation officielle WHOOP."),
-        ConnectorDefinition("withings", "Withings", listOf("com.withings.wiscale2"), "health_connect", "Activez Health Connect dans Withings lorsque disponible."),
-        ConnectorDefinition("health_sync", "Health Sync", listOf("nl.appyhapps.healthsync"), "bridge", "Passerelle autorisée vers Health Connect pour les fournisseurs compatibles."),
-        ConnectorDefinition("myfitnesspal", "MyFitnessPal", listOf("com.myfitnesspal.android"), "health_connect", "Activez Health Connect dans MyFitnessPal pour partager les données nutritionnelles disponibles."),
-        ConnectorDefinition("yazio", "YAZIO", listOf("com.yazio.android"), "provider", "L’accès nutritionnel dépend des autorisations du fournisseur."),
-        ConnectorDefinition("welmi", "Welmi", listOf("welmi.ai.android"), "provider", "Ouvrez Welmi pour gérer le compte et les options de partage proposées."),
-        ConnectorDefinition("cronometer", "Cronometer", listOf("com.cronometer.android.gold"), "provider", "L’accès nutritionnel dépend des autorisations du fournisseur."),
-        ConnectorDefinition("lifesum", "Lifesum", listOf("com.sillens.shapeupclub"), "provider", "L’accès nutritionnel dépend des autorisations du fournisseur."),
-        ConnectorDefinition("fiton", "FitOn", listOf("com.fiton.android"), "provider", "Ouvrez FitOn pour gérer le compte et les intégrations proposées."),
-        ConnectorDefinition("fitify", "Fitify", listOf("com.fitifyworkouts.bodyweight.workoutapp"), "provider", "Ouvrez Fitify pour gérer le compte et les intégrations proposées."),
-        ConnectorDefinition("flexme", "FlexMe", listOf("stretchingworkouts.homeexercises.flexibility"), "provider", "Ouvrez FlexMe pour gérer le compte et les options de partage proposées."),
-        ConnectorDefinition("trainingpeaks", "TrainingPeaks", listOf("com.peaksware.trainingpeaks"), "provider", "La connexion complète dépend de l’autorisation officielle TrainingPeaks."),
-        ConnectorDefinition("zwift", "Zwift", listOf("com.zwift.zwiftgame", "com.zwift.android.prod"), "provider", "La connexion complète dépend des intégrations officielles Zwift."),
-        ConnectorDefinition("peloton", "Peloton", listOf("com.onepeloton.callisto"), "provider", "Ouvrez Peloton pour gérer le compte et les intégrations proposées."),
-        ConnectorDefinition("freeletics", "Freeletics", listOf("com.freeletics.lite"), "provider", "Ouvrez Freeletics pour gérer le compte et les intégrations proposées."),
-        ConnectorDefinition("komoot", "Komoot", listOf("de.komoot.android"), "provider", "La connexion complète dépend de l’autorisation officielle Komoot."),
-        ConnectorDefinition("headspace", "Headspace", listOf("com.getsomeheadspace.android"), "provider", "Ouvrez Headspace pour gérer le compte et les options de partage proposées."),
-        ConnectorDefinition("calm", "Calm", listOf("com.calm.android"), "provider", "Ouvrez Calm pour gérer le compte et les options de partage proposées."),
-        ConnectorDefinition("sleep_cycle", "Sleep Cycle", listOf("com.northcube.sleepcycle"), "provider", "Ouvrez Sleep Cycle pour gérer le compte et les options de partage proposées."),
-        ConnectorDefinition("welltory", "Welltory", listOf("com.welltory.client.android"), "provider", "Ouvrez Welltory pour gérer le compte et les intégrations proposées."),
-        ConnectorDefinition("suunto", "Suunto", listOf("com.stt.android.suunto"), "provider", "Une autorisation Suunto officielle peut être nécessaire."),
-        ConnectorDefinition("coros", "COROS", listOf("com.yf.smart.coros.dist"), "provider", "Une autorisation COROS officielle peut être nécessaire."),
-        ConnectorDefinition("apple_health", "Apple Health", emptyList(), "unsupported_android", "Apple Health n’est pas accessible depuis Android. Utilisez un service intermédiaire officiellement compatible.")
+        hc("health_connect", "Health Connect", listOf("com.google.android.apps.healthdata"), "Accès Android centralisé ; une autorisation Vitalis reste nécessaire."),
+        hc("samsung_health", "Samsung Health", listOf("com.sec.android.app.shealth"), "Activez le partage Health Connect dans Samsung Health."),
+        hc("google_fit", "Google Fit", listOf("com.google.android.apps.fitness"), "Utilisez Health Connect lorsque Google Fit le propose."),
+        hc("mibro_fit", "Mibro Fit", listOf("com.xiaoxun.xunoversea", "com.zhencheng.mibrofit"), "Activez une passerelle officielle vers Health Connect si disponible."),
+        hc("fitbit", "Fitbit", listOf("com.fitbit.FitbitMobile"), "Activez Health Connect depuis les réglages Fitbit."),
+        oauth("garmin", "Garmin Connect", listOf("com.garmin.android.apps.connectmobile")),
+        oauth("huawei", "Huawei Health", listOf("com.huawei.health")),
+        oauth("strava", "Strava", listOf("com.strava")),
+        oauth("oura", "Oura", listOf("com.ouraring.oura")),
+        oauth("whoop", "WHOOP", listOf("com.whoop.android")),
+        hc("withings", "Withings", listOf("com.withings.wiscale2"), "Activez Health Connect dans Withings lorsque disponible."),
+        hc("health_sync", "Health Sync", listOf("nl.appyhapps.healthsync"), "Configurez la passerelle vers Health Connect, puis revenez dans Vitalis."),
+        hc("myfitnesspal", "MyFitnessPal", listOf("com.myfitnesspal.android"), "Activez Health Connect pour les données nutritionnelles disponibles."),
+        oauth("yazio", "YAZIO", listOf("com.yazio.android")),
+        setup("welmi", "Welmi", listOf("welmi.ai.android")),
+        oauth("cronometer", "Cronometer", listOf("com.cronometer.android.gold")),
+        oauth("lifesum", "Lifesum", listOf("com.sillens.shapeupclub")),
+        setup("fiton", "FitOn", listOf("com.fiton.android")),
+        setup("fitify", "Fitify", listOf("com.fitifyworkouts.bodyweight.workoutapp")),
+        setup("flexme", "FlexMe", listOf("stretchingworkouts.homeexercises.flexibility")),
+        oauth("trainingpeaks", "TrainingPeaks", listOf("com.peaksware.trainingpeaks")),
+        setup("zwift", "Zwift", listOf("com.zwift.zwiftgame", "com.zwift.android.prod")),
+        setup("peloton", "Peloton", listOf("com.onepeloton.callisto")),
+        setup("freeletics", "Freeletics", listOf("com.freeletics.lite")),
+        oauth("komoot", "Komoot", listOf("de.komoot.android")),
+        setup("headspace", "Headspace", listOf("com.getsomeheadspace.android")),
+        setup("calm", "Calm", listOf("com.calm.android")),
+        setup("sleep_cycle", "Sleep Cycle", listOf("com.northcube.sleepcycle")),
+        setup("welltory", "Welltory", listOf("com.welltory.client.android")),
+        oauth("suunto", "Suunto", listOf("com.stt.android.suunto")),
+        oauth("coros", "COROS", listOf("com.yf.smart.coros.dist")),
+        ConnectorDefinition(
+            id = "apple_health",
+            name = "Apple Health",
+            packages = emptyList(),
+            capability = ConnectorCapability.UNSUPPORTED_PLATFORM,
+            note = "Apple Health est indisponible comme source directe sur Android."
+        )
     )
 
     fun find(id: String?): ConnectorDefinition? =
         id?.takeIf { it.isNotBlank() }?.let { stableId -> entries.firstOrNull { it.id == stableId } }
+
+    private fun hc(id: String, name: String, packages: List<String>, note: String) =
+        ConnectorDefinition(id, name, packages, ConnectorCapability.HEALTH_CONNECT, note)
+
+    private fun setup(id: String, name: String, packages: List<String>) =
+        ConnectorDefinition(
+            id,
+            name,
+            packages,
+            ConnectorCapability.APP_SETUP_ONLY,
+            "Ouvrez l’application pour configurer ses propres options. Cela ne connecte pas automatiquement Vitalis."
+        )
+
+    private fun oauth(id: String, name: String, packages: List<String>) =
+        ConnectorDefinition(
+            id,
+            name,
+            packages,
+            ConnectorCapability.DIRECT_OAUTH,
+            "Connexion directe non implémentée. L’application peut uniquement être ouverte pour sa configuration.",
+            directIntegrationImplemented = false,
+            futureRequirement = OAUTH_REQUIREMENT
+        )
 }

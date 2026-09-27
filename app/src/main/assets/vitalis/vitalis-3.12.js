@@ -120,16 +120,26 @@
   function overlay(titleHtml, bodyHtml, className) {
     installStyles();
     var old = document.querySelector(".vitalis-power-overlay-312");
-    if (old) old.remove();
+    if (old) { stopOverlayVoice(); old.remove(); }
     var root = document.createElement("div");
     root.className = "vitalis-native-overlay vitalis-power-overlay-312 " + (className || "");
     root.innerHTML = '<div class="vitalis-native-sheet"><div class="vitalis-native-head">' +
       titleHtml + '<button class="vitalis-native-close" aria-label="Fermer">×</button></div>' +
       bodyHtml + "</div>";
     document.body.appendChild(root);
-    root.querySelector(".vitalis-native-close").onclick = function () { root.remove(); };
-    root.addEventListener("click", function (event) { if (event.target === root) root.remove(); });
+    root.querySelector(".vitalis-native-close").onclick = function () {
+      stopOverlayVoice();
+      root.remove();
+    };
+    root.addEventListener("click", function (event) {
+      if (event.target === root) { stopOverlayVoice(); root.remove(); }
+    });
     return root;
+  }
+
+  function stopOverlayVoice() {
+    if (bridge && bridge.stopVoiceInput) bridge.stopVoiceInput();
+    if (bridge && bridge.stopSpeaking) bridge.stopSpeaking();
   }
 
   function setSelectedCoach(id) {
@@ -755,17 +765,20 @@
 
   function statusLabel(status) {
     return {
-      connected:"Connecté", installed:"Installé", available:"À autoriser",
-      update_required:"À mettre à jour", unavailable:"Indisponible",
-      unsupported_android:"Indisponible sur Android", not_installed:"Non installé"
+      health_connect_data_available:"Données détectées via Health Connect",
+      health_connect_available_no_data:"Accès Health Connect activé, aucune donnée",
+      health_connect_permission_required:"Autorisation Health Connect requise",
+      setup_required:"Configuration requise", api_unavailable:"Connexion directe non implémentée",
+      unsupported:"Non pris en charge sur Android", unavailable:"Indisponible",
+      not_installed:"Non installé", installed:"Installé"
     }[status] || "À configurer";
   }
 
   function actionLabel(item) {
-    if (item.status === "connected") return "Gérer";
+    if (item.status === "health_connect_data_available") return "Gérer";
     if (item.action === "authorize_health_connect") return "Autoriser";
     if (item.action === "authorize_via_health_connect") return "Autoriser et ouvrir";
-    if (item.action === "open_provider") return "Autoriser via l’application";
+    if (item.action === "open_provider") return "Ouvrir l’application";
     if (item.action === "unsupported_android") return "Non disponible sur Android";
     return "Installer";
   }
@@ -776,7 +789,7 @@
     var cards = items.map(function (item) {
       return '<div class="vitalis-connector-card-312"><div class="vitalis-connector-top-312"><b>' +
         esc(item.name || item.packageName) + '</b><span class="vitalis-status-312 ' + esc(item.status) + '">' +
-        esc(statusLabel(item.status)) + '</span></div><small>' + esc(item.note || "Source détectée automatiquement.") +
+        esc(item.userFacingStatus || statusLabel(item.status)) + '</span></div><small>' + esc(item.note || "Source détectée automatiquement.") +
         '</small><button class="vitalis-connector-action-312" data-connector-312="' + esc(item.id || item.packageName) +
         '" ' + (item.action === "unsupported_android" ? "disabled" : "") + ">" +
         esc(actionLabel(item)) + "</button></div>";
@@ -784,7 +797,7 @@
     var root = overlay(
       '<div><h3>Connecteurs et autorisations</h3><div class="vitalis-agent-chip-312">' +
       Number(connectorState.connectorCount || 0) + " source(s) avec données</div></div>",
-      '<p class="vitalis-ai-note">« Autoriser et ouvrir » demande d’abord les permissions Health Connect à Vitalis, puis ouvre l’application afin que vous activiez son partage. « Autoriser via l’application » ouvre le service pour utiliser uniquement son intégration officielle.</p>' +
+      '<p class="vitalis-ai-note">Une application installée ou ouverte n’est pas automatiquement connectée. Pour Health Connect, activez le partage chez le fournisseur puis revenez dans Vitalis. Connexion directe non implémentée signifie qu’aucun OAuth/API fournisseur n’est actif.</p>' +
       (cards || '<div class="vitalis-deep-empty">Aucun connecteur disponible.</div>')
     );
     root.addEventListener("click", function (event) {
@@ -838,7 +851,7 @@
 
   window.addEventListener("vitalis-voice-input", function (event) {
     var detail = event.detail || {};
-    if (detail.partial || !detail.text) return;
+    if (detail.kind !== "FINAL" || !detail.text) return;
     var root = document.querySelector(".vitalis-coach-overlay-312");
     var input = root && root.__vitalisAiInput;
     if (input) {
