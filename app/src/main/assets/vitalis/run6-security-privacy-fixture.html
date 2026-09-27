@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Vitalis Run 6 security fixture</title>
+</head>
+<body>
+  <button id="runFixture">Run security fixture</button>
+  <pre id="fixtureResult">waiting</pre>
+  <iframe id="trustedSubframe" src="run6-security-subframe.html"></iframe>
+  <script>
+    window.__run6Fixture=true;
+    window.__run6DataOriginChannel="waiting";
+    window.__run6SubframeReply="waiting";
+    window.addEventListener("message",function(event){
+      var data=event.data||{};
+      if(data.type==="run6-data-origin") window.__run6DataOriginChannel=data.channel;
+      if(data.type==="run6-subframe-reply") window.__run6SubframeReply=data.reply;
+    });
+    var hostile=document.createElement("iframe");
+    hostile.src="data:text/html,<script>parent.postMessage({type:'run6-data-origin',channel:typeof%20VitalisNativeChannel},'*')<\/script>";
+    document.body.appendChild(hostile);
+    document.getElementById("runFixture").onclick=function(){
+      var raw=window.VitalisAndroid&&window.VitalisAndroid.getRun6FixtureResult
+        ?window.VitalisAndroid.getRun6FixtureResult():"{}";
+      document.getElementById("fixtureResult").textContent=raw;
+    };
+  </script>
+</body>
+</html>

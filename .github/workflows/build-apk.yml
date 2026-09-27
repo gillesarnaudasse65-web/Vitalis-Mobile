@@ -15,9 +15,9 @@ permissions:
 
 jobs:
   build:
-    name: Unit tests, lint, debug APK
+    name: Unit tests, lint and debug APKs
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 50
     steps:
       - uses: actions/checkout@v4
       - name: Verify Gradle wrapper
@@ -47,6 +47,8 @@ jobs:
         run: ./gradlew --no-daemon testDebugUnitTest --tests com.vitalis.healthos.VoiceReliabilityTest
       - name: Connector truthfulness JVM tests (isolated)
         run: ./gradlew --no-daemon testDebugUnitTest --tests com.vitalis.healthos.ConnectorCatalogTest
+      - name: Run 6 security and privacy JVM tests (isolated)
+        run: ./gradlew --no-daemon testDebugUnitTest --tests com.vitalis.healthos.Run6SecurityPrivacyTest
       - name: Android unit tests
         run: ./gradlew --no-daemon testDebugUnitTest --rerun-tasks
       - name: Android lint
@@ -72,6 +74,75 @@ jobs:
           path: |
             app/build/outputs/apk/debug/app-debug.apk
             app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
+          if-no-files-found: error
+          retention-days: 90
+
+  release:
+    name: Minified release APK and AAB
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify Gradle wrapper
+        uses: gradle/actions/wrapper-validation@v4
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v4
+      - name: Set up Gradle cache
+        uses: gradle/actions/setup-gradle@v4
+      - name: Prepare optional production signing material
+        env:
+          VITALIS_KEYSTORE_BASE64: ${{ secrets.VITALIS_KEYSTORE_BASE64 }}
+          VITALIS_KEYSTORE_PASSWORD: ${{ secrets.VITALIS_KEYSTORE_PASSWORD }}
+          VITALIS_KEY_ALIAS: ${{ secrets.VITALIS_KEY_ALIAS }}
+          VITALIS_KEY_PASSWORD: ${{ secrets.VITALIS_KEY_PASSWORD }}
+        run: |
+          if [ -n "$VITALIS_KEYSTORE_BASE64" ]; then
+            test -n "$VITALIS_KEYSTORE_PASSWORD"
+            test -n "$VITALIS_KEY_ALIAS"
+            test -n "$VITALIS_KEY_PASSWORD"
+            printf '%s' "$VITALIS_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/vitalis-release.jks"
+            echo "VITALIS_SIGNING_AVAILABLE=true" >> "$GITHUB_ENV"
+            echo "VITALIS_SIGNING_LABEL=production-signed" >> "$GITHUB_ENV"
+          else
+            echo "VITALIS_SIGNING_AVAILABLE=false" >> "$GITHUB_ENV"
+            echo "VITALIS_SIGNING_LABEL=test-signed" >> "$GITHUB_ENV"
+          fi
+      - name: Assemble production-signed release APK and AAB
+        if: env.VITALIS_SIGNING_AVAILABLE == 'true'
+        env:
+          VITALIS_KEYSTORE_PATH: ${{ runner.temp }}/vitalis-release.jks
+          VITALIS_KEYSTORE_PASSWORD: ${{ secrets.VITALIS_KEYSTORE_PASSWORD }}
+          VITALIS_KEY_ALIAS: ${{ secrets.VITALIS_KEY_ALIAS }}
+          VITALIS_KEY_PASSWORD: ${{ secrets.VITALIS_KEY_PASSWORD }}
+        run: ./gradlew --no-daemon assembleRelease bundleRelease
+      - name: Assemble test-signed release APK and AAB
+        if: env.VITALIS_SIGNING_AVAILABLE == 'false'
+        env:
+          VITALIS_USE_DEBUG_RELEASE_SIGNING: 'true'
+        run: ./gradlew --no-daemon assembleRelease bundleRelease
+      - name: Generate release SHA-256 checksums
+        run: |
+          mkdir -p app/build/distributions
+          sha256sum \
+            app/build/outputs/apk/release/app-release.apk \
+            app/build/outputs/bundle/release/app-release.aab \
+            app/build/outputs/mapping/release/mapping.txt \
+            > app/build/distributions/vitalis-sha256.txt
+      - name: Upload release candidate artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: Vitalis-release-${{ env.VITALIS_SIGNING_LABEL }}
+          path: |
+            app/build/outputs/apk/release/app-release.apk
+            app/build/outputs/bundle/release/app-release.aab
+            app/build/outputs/mapping/release/mapping.txt
+            app/build/distributions/vitalis-sha256.txt
           if-no-files-found: error
           retention-days: 90
 
@@ -104,7 +175,25 @@ jobs:
           arch: x86_64
           profile: pixel_6
           disable-animations: true
-          script: ./gradlew --no-daemon connectedDebugAndroidTest
+          script: |
+            ./gradlew --no-daemon assembleDebug assembleDebugAndroidTest
+            git fetch --depth=1 origin dd78d30244bdedb62346ab6f02f3063a590c989c
+            git worktree add "$RUNNER_TEMP/vitalis-run5-baseline" dd78d30244bdedb62346ab6f02f3063a590c989c
+            cp app/src/androidTest/java/com/vitalis/healthos/Run6UpgradeContinuityTest.kt "$RUNNER_TEMP/vitalis-run5-baseline/app/src/androidTest/java/com/vitalis/healthos/"
+            (cd "$RUNNER_TEMP/vitalis-run5-baseline" && ./gradlew --no-daemon assembleDebug assembleDebugAndroidTest)
+            adb install "$RUNNER_TEMP/vitalis-run5-baseline/app/build/outputs/apk/debug/app-debug.apk"
+            adb install "$RUNNER_TEMP/vitalis-run5-baseline/app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk"
+            adb shell am instrument -w -e class 'com.vitalis.healthos.Run6UpgradeContinuityTest#a_seedPreRun6Data' com.vitalis.healthos.test/androidx.test.runner.AndroidJUnitRunner > upgrade-continuity.txt
+            adb install -r app/build/outputs/apk/debug/app-debug.apk
+            adb install -r app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
+            adb shell am instrument -w -e class 'com.vitalis.healthos.Run6UpgradeContinuityTest#b_verifyRun6UpgradePreservesData' com.vitalis.healthos.test/androidx.test.runner.AndroidJUnitRunner >> upgrade-continuity.txt
+            grep -q 'OK (1 test)' upgrade-continuity.txt
+            ./gradlew --no-daemon connectedDebugAndroidTest
+            VITALIS_USE_DEBUG_RELEASE_SIGNING=true ./gradlew --no-daemon assembleRelease
+            adb install -r app/build/outputs/apk/release/app-release.apk
+            adb shell am start -W -n com.vitalis.healthos/.MainActivity > release-smoke.txt
+            adb shell pidof com.vitalis.healthos >> release-smoke.txt
+            adb shell dumpsys package com.vitalis.healthos | sed -n '/versionCode=/p;/versionName=/p' >> release-smoke.txt
       - name: Upload instrumentation reports
         if: always()
         uses: actions/upload-artifact@v4
@@ -113,5 +202,7 @@ jobs:
           path: |
             app/build/reports/androidTests/
             app/build/outputs/androidTest-results/
+            release-smoke.txt
+            upgrade-continuity.txt
           if-no-files-found: warn
           retention-days: 90

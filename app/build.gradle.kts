@@ -3,6 +3,19 @@ plugins {
     id("org.jetbrains.kotlin.android")
 }
 
+val releaseKeystorePath = providers.environmentVariable("VITALIS_KEYSTORE_PATH").orNull
+val releaseKeystorePassword = providers.environmentVariable("VITALIS_KEYSTORE_PASSWORD").orNull
+val releaseKeyAlias = providers.environmentVariable("VITALIS_KEY_ALIAS").orNull
+val releaseKeyPassword = providers.environmentVariable("VITALIS_KEY_PASSWORD").orNull
+val releaseSigningConfigured = listOf(
+    releaseKeystorePath,
+    releaseKeystorePassword,
+    releaseKeyAlias,
+    releaseKeyPassword
+).all { !it.isNullOrBlank() }
+val useDebugReleaseSigning = providers.environmentVariable("VITALIS_USE_DEBUG_RELEASE_SIGNING")
+    .orNull == "true"
+
 android {
     namespace = "com.vitalis.healthos"
     compileSdk = 36
@@ -11,14 +24,35 @@ android {
         applicationId = "com.vitalis.healthos"
         minSdk = 28
         targetSdk = 35
-        versionCode = 19
-        versionName = "3.14.0-coaches-connectors"
+        versionCode = 20
+        versionName = "3.15.0-security-release"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+    }
+
+    signingConfigs {
+        if (releaseSigningConfigured) {
+            create("vitalisRelease") {
+                storeFile = file(requireNotNull(releaseKeystorePath))
+                storePassword = releaseKeystorePassword
+                keyAlias = releaseKeyAlias
+                keyPassword = releaseKeyPassword
+                enableV1Signing = true
+                enableV2Signing = true
+                enableV3Signing = true
+                enableV4Signing = true
+            }
+        }
     }
 
     buildTypes {
         release {
             isMinifyEnabled = true
+            isShrinkResources = true
+            signingConfig = when {
+                releaseSigningConfigured -> signingConfigs.getByName("vitalisRelease")
+                useDebugReleaseSigning -> signingConfigs.getByName("debug")
+                else -> null
+            }
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
@@ -28,6 +62,10 @@ android {
 
     buildFeatures {
         buildConfig = true
+    }
+
+    testOptions {
+        animationsDisabled = true
     }
 
     compileOptions {

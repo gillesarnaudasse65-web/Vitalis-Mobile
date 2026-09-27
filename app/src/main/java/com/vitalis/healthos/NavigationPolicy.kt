@@ -3,7 +3,7 @@ package com.vitalis.healthos
 import java.net.URI
 import java.util.Locale
 
-/** Top-level navigation only. addJavascriptInterface is still visible to subframes. */
+/** Top-level navigation policy; privileged messaging is separately origin and frame gated. */
 internal object NavigationPolicy {
     private const val REMOTE_HOST = "vitalis-health-os.gillesarnaudasse65.chatgpt.site"
     private const val ASSET_HOST = "appassets.androidplatform.net"
