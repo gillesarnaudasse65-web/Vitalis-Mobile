@@ -1779,6 +1779,15 @@ class MainActivity : ComponentActivity() {
             put("deceptiveOriginRejected", !OriginBridgePolicy.canInvoke(
                 "https://appassets.androidplatform.net.attacker.invalid", true, "refreshHealthData"
             ))
+            put("dataOriginRejected", !OriginBridgePolicy.canInvoke(
+                "data:text/html,hello", true, "refreshHealthData"
+            ))
+            put("fileOriginRejected", !OriginBridgePolicy.canInvoke(
+                "file:///tmp/vitalis.html", true, "refreshHealthData"
+            ))
+            put("javascriptOriginRejected", !OriginBridgePolicy.canInvoke(
+                "javascript:alert(1)", true, "refreshHealthData"
+            ))
             put("lateResponseRejected", lateResponseRejected)
             put("keySaved", saved)
             put("keyStatusMasked", status.configured && status.maskedSuffix?.contains("run6") == true)

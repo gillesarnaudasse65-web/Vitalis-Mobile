@@ -39,14 +39,12 @@ class Run6SecurityPrivacyWebViewTest {
             val result = JSONObject(decoded(eval(scenario, "document.querySelector('#fixtureResult').textContent")))
             listOf(
                 "exactOriginAllowed", "subframeRejected", "deceptiveOriginRejected",
+                "dataOriginRejected", "fileOriginRejected", "javascriptOriginRejected",
                 "lateResponseRejected", "keySaved", "keyStatusMasked",
                 "keyUsableOnlyInternally", "keyDeleted", "exportExcludesSecrets",
                 "validImportAccepted", "malformedImportRejected",
                 "oversizedImportRejected", "futureImportRejected"
             ).forEach { key -> assertTrue("Expected $key", result.getBoolean(key)) }
-
-            await(scenario) { decoded(eval(scenario, "String(window.__run6DataOriginChannel)")) != "waiting" }
-            assertEquals("undefined", decoded(eval(scenario, "String(window.__run6DataOriginChannel)")))
 
             scenario.onActivity { it.clearDebugRecordedDates() }
             eval(scenario, "window.__run6LaunchSubframe();true")
