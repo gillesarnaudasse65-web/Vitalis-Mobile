@@ -31,7 +31,8 @@ test('test-signed RC output is explicitly prohibited from production distributio
 
 test('RC release workflow verifies signatures and emits SHA-256 checksums', () => {
   const workflow = read('.github/workflows/build-apk.yml');
-  assert.match(workflow, /apksigner verify --verbose --print-certs/);
+  assert.match(workflow, /APKSIGNER_PATH/);
+  assert.match(workflow, /verify --verbose --print-certs/);
   assert.match(workflow, /jarsigner -verify -verbose -certs/);
   assert.match(workflow, /sha256sum/);
 });

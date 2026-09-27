@@ -138,13 +138,15 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p app/build/distributions
+          APKSIGNER_PATH="$(find "$ANDROID_HOME/build-tools" -type f -name apksigner -print | sort -V | tail -n 1)"
+          test -x "$APKSIGNER_PATH"
           {
             echo "Vitalis 3.15.0-rc1"
             echo "Signing label: $VITALIS_SIGNING_LABEL"
             echo "Distribution status: $([ "$VITALIS_SIGNING_AVAILABLE" = true ] && echo PRODUCTION_CANDIDATE || echo 'NOT FOR PRODUCTION DISTRIBUTION')"
             echo
             echo "APK signer verification"
-            apksigner verify --verbose --print-certs app/build/outputs/apk/release/app-release.apk
+            "$APKSIGNER_PATH" verify --verbose --print-certs app/build/outputs/apk/release/app-release.apk
             echo
             echo "AAB JAR signature verification"
             jarsigner -verify -verbose -certs app/build/outputs/bundle/release/app-release.aab
