@@ -7,6 +7,10 @@ const ux = fs.readFileSync('app/src/main/assets/vitalis/final-ux.js', 'utf8');
 const activity = fs.readFileSync('app/src/main/java/com/vitalis/healthos/MainActivity.kt', 'utf8');
 const compat = fs.readFileSync('app/src/main/assets/vitalis/compat.js', 'utf8');
 
+test('Final UX does not mount over stabilized Run 2 to Run 6 fixtures', () => {
+  assert.match(ux, /run\(\?:2\|3\|4\|5\|6\)\[\^\/\]\*fixture/);
+});
+
 test('six named themes and six accents remain stable', () => {
   assert.deepEqual(core.themes, ['classic', 'ocean', 'dark', 'amoled', 'aurora', 'system']);
   assert.deepEqual(core.accents, ['green', 'ocean', 'aqua', 'indigo', 'violet', 'coral']);

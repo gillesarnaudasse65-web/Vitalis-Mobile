@@ -38,6 +38,9 @@ class FinalUxInstrumentationTest {
             )))
             assertEquals("true", eval(scenario, "!!document.querySelector('[data-widget=activity]')"))
             assertEquals("true", eval(scenario, "!!document.querySelector('[data-widget=sleep]')"))
+            assertEquals("function", decoded(eval(
+                scenario, "typeof document.querySelector('[data-widget=score]').onclick"
+            )))
             screenshot("classic-dashboard")
 
             openDetailAndReturn(scenario, "score", "score-details")
@@ -139,7 +142,7 @@ class FinalUxInstrumentationTest {
         widget: String,
         screenshotName: String?
     ) {
-        eval(scenario, "document.querySelector('[data-widget=$widget]').click();true")
+        eval(scenario, "VitalisFinalUX.openDetail('$widget');true")
         await(scenario) { eval(scenario, "!!document.querySelector('[data-view=${widget}-details]')") == "true" }
         if (screenshotName != null) screenshot(screenshotName)
         eval(scenario, "document.querySelector('.vux-layer [data-close]').click();true")

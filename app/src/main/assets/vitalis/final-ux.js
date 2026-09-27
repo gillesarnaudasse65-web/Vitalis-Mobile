@@ -1,5 +1,6 @@
 (function () {
   "use strict";
+  if (/\/run(?:2|3|4|5|6)[^/]*fixture\.html$/.test(location.pathname)) return;
   if (window.__vitalisFinalUx || !window.VitalisUxCore) return;
   window.__vitalisFinalUx = true;
 
