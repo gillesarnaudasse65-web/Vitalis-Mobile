@@ -18,7 +18,7 @@ class BridgeInputPolicyTest {
 
     @Test fun oversizeAndBlankMealPayloadsAreRejected() {
         assertTrue(BridgeInputPolicy.mealJsonSize("{\"name\":\"Lunch\"}"))
-        for (value in listOf(null, "", " ", "x".repeat(24_001)))
+        for (value in listOf(null, "", " ", "x".repeat(32_001)))
             assertFalse(BridgeInputPolicy.mealJsonSize(value))
     }
 
@@ -28,7 +28,8 @@ class BridgeInputPolicyTest {
         assertFalse(BridgeInputPolicy.apiKey("invalid"))
         assertTrue(BridgeInputPolicy.mealImage("data:image/jpeg;base64," + "A".repeat(40)))
         assertFalse(BridgeInputPolicy.mealImage("data:text/html;base64," + "A".repeat(40)))
-        assertFalse(BridgeInputPolicy.mealImage("data:image/jpeg;base64," + "A".repeat(6_000_000)))
+        assertFalse(BridgeInputPolicy.mealImage("data:image/jpeg;base64," + "A".repeat(2_100_001)))
+        assertFalse(BridgeInputPolicy.mealImage("data:image/jpeg;base64,<script>"))
     }
 
     @Test fun onlyOrdinaryExternalHttpsCanBeOpenedByBridge() {

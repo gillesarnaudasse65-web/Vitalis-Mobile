@@ -12,12 +12,22 @@ internal object BridgeInputPolicy {
     fun requestId(raw: String?): Boolean =
         raw != null && raw.length in 1..120 && raw.all { it.isLetterOrDigit() || it in "-_:." }
 
-    fun mealJsonSize(raw: String?): Boolean = raw != null && raw.isNotBlank() && raw.length <= 24_000
+    fun mealJsonSize(raw: String?): Boolean = raw != null && raw.isNotBlank() && raw.length <= 32_000
 
-    fun mealImage(raw: String?): Boolean = raw != null && raw.length in 32..6_000_000 &&
-        (raw.startsWith("data:image/jpeg;base64,") ||
-            raw.startsWith("data:image/png;base64,") ||
-            raw.startsWith("data:image/webp;base64,"))
+    fun mealImage(raw: String?): Boolean {
+        if (raw == null || raw.length !in 32..(NutritionImagePolicy.MAX_BASE64_CHARACTERS + 32)) {
+            return false
+        }
+        val prefix = listOf(
+            "data:image/jpeg;base64,",
+            "data:image/png;base64,",
+            "data:image/webp;base64,"
+        ).firstOrNull(raw::startsWith) ?: return false
+        val payload = raw.substring(prefix.length)
+        return payload.length <= NutritionImagePolicy.MAX_BASE64_CHARACTERS && payload.all {
+            it.isLetterOrDigit() || it == '+' || it == '/' || it == '='
+        }
+    }
 
     fun apiKey(raw: String?): Boolean = raw != null && raw.length in 30..512 && raw.startsWith("sk-")
 

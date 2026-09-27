@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Vitalis Run 4 nutrition fixture</title>
+  <style>
+    body{font-family:system-ui,sans-serif;background:#f8f6ef;color:#063c30;padding:20px}
+    main{max-width:520px;margin:auto;background:#fff;border-radius:18px;padding:20px}
+    label,button,strong{display:block;margin:12px 0}button,input{min-height:48px;padding:10px}
+  </style>
+</head>
+<body>
+<main>
+  <h1>Scanner nutrition</h1>
+  <label>Date sélectionnée <input id="selectedDate" type="date"></label>
+  <strong data-vitalis-date-label></strong>
+  <button id="startSynthetic">Scanner l’image synthétique</button>
+  <button id="manageMeals">Gérer mes repas</button>
+  <output id="lastState">En attente</output>
+</main>
+<script>
+  document.querySelector("#startSynthetic").onclick = function () {
+    window.VitalisNutrition.startScan("synthetic_test");
+  };
+  document.querySelector("#manageMeals").onclick = function () {
+    window.VitalisNutrition.openManager();
+  };
+  window.addEventListener("vitalis-nutrition-scan-state", function (event) {
+    document.querySelector("#lastState").textContent = (event.detail || {}).status || "unknown";
+  });
+  window.__run4Fixture = true;
+</script>
+</body>
+</html>
