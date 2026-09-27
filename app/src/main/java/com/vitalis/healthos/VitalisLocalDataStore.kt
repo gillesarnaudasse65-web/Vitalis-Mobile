@@ -148,7 +148,7 @@ class VitalisLocalDataStore(private val context: Context) {
         for (source in listOf(existing, imported)) for (index in 0 until source.length()) {
             source.optJSONObject(index)?.toString()?.take(MAX_JOURNAL_ITEM_CHARS)?.let(items::add)
         }
-        return JSONArray(items.takeLast(MAX_JOURNAL_ENTRIES).map(::JSONObject))
+        return JSONArray(items.toList().takeLast(MAX_JOURNAL_ENTRIES).map { JSONObject(it) })
     }
 
     private fun safeArray(raw: String?): JSONArray =
