@@ -267,7 +267,8 @@ class MainActivity : ComponentActivity() {
                 intent.getBooleanExtra(EXTRA_RUN3_FIXTURE, false) ||
                 intent.getBooleanExtra(EXTRA_RUN4_FIXTURE, false) ||
                 intent.getBooleanExtra(EXTRA_RUN5_FIXTURE, false) ||
-                intent.getBooleanExtra(EXTRA_RUN6_FIXTURE, false)
+                intent.getBooleanExtra(EXTRA_RUN6_FIXTURE, false) ||
+                intent.getBooleanExtra(EXTRA_FINAL_UX_FIXTURE, false)
             )
         val deviceClock = if (debugFixture) {
             val fixed = BridgeInputPolicy.date(intent.getStringExtra(EXTRA_TEST_TODAY_ISO))
@@ -456,6 +457,8 @@ class MainActivity : ComponentActivity() {
                     LOCAL_RUN5_TEST_URL
                 BuildConfig.DEBUG && intent.getBooleanExtra(EXTRA_RUN6_FIXTURE, false) ->
                     LOCAL_RUN6_TEST_URL
+                BuildConfig.DEBUG && intent.getBooleanExtra(EXTRA_FINAL_UX_FIXTURE, false) ->
+                    LOCAL_FINAL_UX_TEST_URL
                 BuildConfig.DEBUG && intent.getBooleanExtra(EXTRA_FORCE_OFFLINE_FOR_TESTS, false) -> LOCAL_URL
                 else -> VITALIS_URL
             })
@@ -468,7 +471,8 @@ class MainActivity : ComponentActivity() {
                     intent.getBooleanExtra(EXTRA_RUN3_FIXTURE, false) ||
                     intent.getBooleanExtra(EXTRA_RUN4_FIXTURE, false) ||
                     intent.getBooleanExtra(EXTRA_RUN5_FIXTURE, false) ||
-                    intent.getBooleanExtra(EXTRA_RUN6_FIXTURE, false))))
+                    intent.getBooleanExtra(EXTRA_RUN6_FIXTURE, false) ||
+                    intent.getBooleanExtra(EXTRA_FINAL_UX_FIXTURE, false))))
             scheduleClassicInterfaceTimeout()
 
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
@@ -515,7 +519,13 @@ class MainActivity : ComponentActivity() {
 
     private fun injectClassicCompatibility(view: WebView) {
         val script = runCatching {
-            listOf("vitalis/selected-date.js", "vitalis/compat.js", "vitalis/vitalis-3.12.js")
+            listOf(
+                "vitalis/selected-date.js",
+                "vitalis/compat.js",
+                "vitalis/vitalis-3.12.js",
+                "vitalis/final-ux-core.js",
+                "vitalis/final-ux.js"
+            )
                 .joinToString("\n;\n") { asset ->
                     assets.open(asset).bufferedReader().use { it.readText() }
                 }
@@ -3140,6 +3150,7 @@ class MainActivity : ComponentActivity() {
         internal const val EXTRA_RUN4_FIXTURE = "com.vitalis.healthos.RUN4_FIXTURE"
         internal const val EXTRA_RUN5_FIXTURE = "com.vitalis.healthos.RUN5_FIXTURE"
         internal const val EXTRA_RUN6_FIXTURE = "com.vitalis.healthos.RUN6_FIXTURE"
+        internal const val EXTRA_FINAL_UX_FIXTURE = "com.vitalis.healthos.FINAL_UX_FIXTURE"
         internal const val EXTRA_TEST_TODAY_ISO = "com.vitalis.healthos.TEST_TODAY_ISO"
         private const val SELECTED_HEALTH_DATE_KEY = "selected_health_date_iso"
         private const val HEALTH_PERMISSION_REQUESTED_KEY =
@@ -3158,6 +3169,8 @@ class MainActivity : ComponentActivity() {
             "https://$LOCAL_ASSET_HOST/assets/vitalis/run5-voice-connectors-fixture.html"
         private const val LOCAL_RUN6_TEST_URL =
             "https://$LOCAL_ASSET_HOST/assets/vitalis/run6-security-privacy-fixture.html"
+        private const val LOCAL_FINAL_UX_TEST_URL =
+            "https://$LOCAL_ASSET_HOST/assets/vitalis/final-ux-fixture.html"
         private const val VITALIS_HOST = "vitalis-health-os.gillesarnaudasse65.chatgpt.site"
         private const val VITALIS_URL = "https://$VITALIS_HOST/"
         private const val COACH_ASSET_PATH = "/__vitalis/coaches/"

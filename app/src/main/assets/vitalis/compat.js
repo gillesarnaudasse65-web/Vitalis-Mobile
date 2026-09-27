@@ -19,7 +19,7 @@
     catch (_) { return []; }
   }
 
-  function record(type, title, detail) {
+  function record(type, title, detail, extra) {
     var entries = journal();
     var entry = {
       id: Date.now(),
@@ -29,6 +29,9 @@
       at: new Date().toISOString(),
       source: "Vitalis Android"
     };
+    if (extra && typeof extra === "object") Object.keys(extra).forEach(function (key) {
+      entry[key] = extra[key];
+    });
     entries.push(entry);
     localStorage.setItem(STORE_KEY, JSON.stringify(entries.slice(-500)));
     window.dispatchEvent(new CustomEvent("vitalis-local-state-changed"));
@@ -124,6 +127,28 @@
         toast("Hydratation enregistrée.");
       }
     );
+  }
+
+  function addWaterAmount(litres, selectedDate) {
+    var amount = Number(litres);
+    if (!isFinite(amount) || amount <= 0 || amount > 2) return false;
+    var date = /^\d{4}-\d{2}-\d{2}$/.test(String(selectedDate || "")) ? selectedDate : null;
+    var entry = record("water", "Hydratation", Math.round(amount * 1000) + " ml", {
+      selectedDate: date
+    });
+    window.dispatchEvent(new CustomEvent("vitalis-manual-health-data", {
+      detail: { hydrationLitres: amount, selectedDate: entry.selectedDate, entry: entry }
+    }));
+    return entry.id;
+  }
+
+  function removeJournalEntry(entryId) {
+    var before = journal();
+    var after = before.filter(function (entry) { return String(entry.id) !== String(entryId); });
+    if (after.length === before.length) return false;
+    localStorage.setItem(STORE_KEY, JSON.stringify(after));
+    window.dispatchEvent(new CustomEvent("vitalis-local-state-changed"));
+    return true;
   }
 
   function addMeasure() {
@@ -243,6 +268,8 @@
     scanMeal: scanMeal,
     logActivity: logActivity,
     addWater: addWater,
+    addWaterAmount: addWaterAmount,
+    removeJournalEntry: removeJournalEntry,
     addMeasure: addMeasure,
     requestHealthConnectPermissions: healthConnect,
     refreshHealthData: function () {
