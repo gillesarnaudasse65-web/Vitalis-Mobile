@@ -1,16 +1,16 @@
 package com.vitalis.healthos
 
+import android.content.ContentValues
 import android.content.Intent
 import android.graphics.Bitmap
 import android.os.SystemClock
+import android.provider.MediaStore
 import android.view.View
 import android.view.ViewGroup
 import android.webkit.WebView
 import androidx.test.core.app.ActivityScenario
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
-import java.io.File
-import java.io.FileOutputStream
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicReference
@@ -87,8 +87,7 @@ class FinalUxInstrumentationTest {
             assertTrue(performance.optDouble("initialRenderMs", -1.0) in 0.0..5000.0)
             assertTrue(performance.optDouble("themeSwitchMs", -1.0) in 0.0..1000.0)
             assertTrue(performance.optDouble("cardInteractionMs", -1.0) in 0.0..1000.0)
-            val evidenceDirectory = File(instrument.targetContext.getExternalFilesDir(null), "screenshots")
-            File(evidenceDirectory, "performance.json").writeText(performance.toString(2))
+            writePerformanceEvidence(performance.toString(2))
             eval(scenario, "VitalisFinalUX.setTheme('system');VitalisFinalUX.setAccent('violet');true")
             scenario.recreate()
             ready(scenario)
@@ -152,13 +151,41 @@ class FinalUxInstrumentationTest {
     private fun screenshot(name: String) {
         instrument.waitForIdleSync()
         SystemClock.sleep(120)
-        val directory = File(instrument.targetContext.getExternalFilesDir(null), "screenshots")
-        assertTrue(directory.exists() || directory.mkdirs())
         val bitmap = instrument.uiAutomation.takeScreenshot()
-        FileOutputStream(File(directory, "$name.png")).use { output ->
-            assertTrue(bitmap.compress(Bitmap.CompressFormat.PNG, 100, output))
+        val resolver = instrument.targetContext.contentResolver
+        val values = ContentValues().apply {
+            put(MediaStore.Images.Media.DISPLAY_NAME, "$name.png")
+            put(MediaStore.Images.Media.MIME_TYPE, "image/png")
+            put(MediaStore.Images.Media.RELATIVE_PATH, "Pictures/VitalisFinalUX")
+            put(MediaStore.Images.Media.IS_PENDING, 1)
         }
+        val uri = requireNotNull(resolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values))
+        resolver.openOutputStream(uri).use { output ->
+            assertNotNull(output)
+            assertTrue(bitmap.compress(Bitmap.CompressFormat.PNG, 100, output!!))
+        }
+        values.clear()
+        values.put(MediaStore.Images.Media.IS_PENDING, 0)
+        resolver.update(uri, values, null, null)
         bitmap.recycle()
+    }
+
+    private fun writePerformanceEvidence(json: String) {
+        val resolver = instrument.targetContext.contentResolver
+        val values = ContentValues().apply {
+            put(MediaStore.Downloads.DISPLAY_NAME, "performance.json")
+            put(MediaStore.Downloads.MIME_TYPE, "application/json")
+            put(MediaStore.Downloads.RELATIVE_PATH, "Download/VitalisFinalUX")
+            put(MediaStore.Downloads.IS_PENDING, 1)
+        }
+        val uri = requireNotNull(resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values))
+        resolver.openOutputStream(uri).use { output ->
+            assertNotNull(output)
+            output!!.write(json.toByteArray())
+        }
+        values.clear()
+        values.put(MediaStore.Downloads.IS_PENDING, 0)
+        resolver.update(uri, values, null, null)
     }
 
     private fun ready(scenario: ActivityScenario<MainActivity>) {
