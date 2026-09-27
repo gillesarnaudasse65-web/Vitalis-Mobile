@@ -46,13 +46,6 @@ class Run6UpgradeContinuityTest {
             put("confidence", 0.71)
             put("estimated", true)
         }
-        context.getSharedPreferences("vitalis_preferences", Context.MODE_PRIVATE).edit()
-            .putString("selected_health_date_iso", "2026-09-18")
-            .putString("manual_meal_estimates", JSONArray().put(meal).toString())
-            .putBoolean("ai_health_consent", true)
-            .putString("upgrade_connector_preference", "samsung_health")
-            .commit()
-
         launchFixture("com.vitalis.healthos.RUN5_FIXTURE").use { scenario ->
             await(scenario) { eval(scenario, "window.__run5Fixture===true") == "true" }
             eval(scenario, "localStorage.setItem('vitalis-selected-coach-v312','sleep');" +
@@ -60,6 +53,13 @@ class Run6UpgradeContinuityTest {
                 "localStorage.setItem('vitalis-offline-v1','{\"period\":\"day\"}');true")
             assertEquals("\"sleep\"", eval(scenario, "localStorage.getItem('vitalis-selected-coach-v312')"))
         }
+
+        assertTrue(context.getSharedPreferences("vitalis_preferences", Context.MODE_PRIVATE).edit()
+            .putString("selected_health_date_iso", "2026-09-18")
+            .putString("manual_meal_estimates", JSONArray().put(meal).toString())
+            .putBoolean("ai_health_consent", true)
+            .putString("upgrade_connector_preference", "samsung_health")
+            .commit())
     }
 
     @Test fun b_verifyRun6UpgradePreservesData() {

@@ -8,19 +8,25 @@
 <body>
   <button id="runFixture">Run security fixture</button>
   <pre id="fixtureResult">waiting</pre>
-  <iframe id="trustedSubframe" src="run6-security-subframe.html"></iframe>
   <script>
     window.__run6Fixture=true;
     window.__run6DataOriginChannel="waiting";
-    window.__run6SubframeReply="waiting";
+    window.__run6SubframeChannel="waiting";
     window.addEventListener("message",function(event){
       var data=event.data||{};
       if(data.type==="run6-data-origin") window.__run6DataOriginChannel=data.channel;
-      if(data.type==="run6-subframe-reply") window.__run6SubframeReply=data.reply;
+      if(data.type==="run6-subframe-channel") window.__run6SubframeChannel=data.channel;
     });
     var hostile=document.createElement("iframe");
     hostile.src="data:text/html,<script>parent.postMessage({type:'run6-data-origin',channel:typeof%20VitalisNativeChannel},'*')<\/script>";
     document.body.appendChild(hostile);
+    window.__run6LaunchSubframe=function(){
+      window.__run6SubframeChannel="waiting";
+      var frame=document.createElement("iframe");
+      frame.id="trustedSubframe";
+      frame.src="run6-security-subframe.html?run="+Date.now();
+      document.body.appendChild(frame);
+    };
     document.getElementById("runFixture").onclick=function(){
       var raw=window.VitalisAndroid&&window.VitalisAndroid.getRun6FixtureResult
         ?window.VitalisAndroid.getRun6FixtureResult():"{}";

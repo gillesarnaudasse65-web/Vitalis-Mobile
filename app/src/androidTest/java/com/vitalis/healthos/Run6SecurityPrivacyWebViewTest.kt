@@ -47,9 +47,15 @@ class Run6SecurityPrivacyWebViewTest {
 
             await(scenario) { decoded(eval(scenario, "String(window.__run6DataOriginChannel)")) != "waiting" }
             assertEquals("undefined", decoded(eval(scenario, "String(window.__run6DataOriginChannel)")))
-            await(scenario) { decoded(eval(scenario, "String(window.__run6SubframeReply)")) != "waiting" }
-            val subframeReply = decoded(eval(scenario, "String(window.__run6SubframeReply)"))
-            assertFalse(JSONObject(subframeReply).getBoolean("ok"))
+
+            scenario.onActivity { it.clearDebugRecordedDates() }
+            eval(scenario, "window.__run6LaunchSubframe();true")
+            await(scenario) { decoded(eval(scenario, "String(window.__run6SubframeChannel)")) != "waiting" }
+            assertEquals("object", decoded(eval(scenario, "String(window.__run6SubframeChannel)")))
+            SystemClock.sleep(300)
+            scenario.onActivity { activity ->
+                assertTrue("Subframe must not invoke native refresh", activity.debugRecordedDates().isEmpty())
+            }
         }
     }
 
