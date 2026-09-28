@@ -552,29 +552,82 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun injectClassicCompatibility(view: WebView) {
-        val script = runCatching {
-            val productionLayers = mutableListOf(
-                "vitalis/selected-date.js",
-                "vitalis/compat.js",
-                "vitalis/vitalis-3.12.js"
+        val productionLayers = mutableListOf(
+            "vitalis/selected-date.js",
+            "vitalis/compat.js",
+            "vitalis/vitalis-3.12.js"
+        )
+        val stabilizedFixture = BuildConfig.DEBUG && (
+            intent.getBooleanExtra(EXTRA_RUN2_FIXTURE, false) ||
+                intent.getBooleanExtra(EXTRA_RUN3_FIXTURE, false) ||
+                intent.getBooleanExtra(EXTRA_RUN4_FIXTURE, false) ||
+                intent.getBooleanExtra(EXTRA_RUN5_FIXTURE, false) ||
+                intent.getBooleanExtra(EXTRA_RUN6_FIXTURE, false)
             )
-            val stabilizedFixture = BuildConfig.DEBUG && (
-                intent.getBooleanExtra(EXTRA_RUN2_FIXTURE, false) ||
-                    intent.getBooleanExtra(EXTRA_RUN3_FIXTURE, false) ||
-                    intent.getBooleanExtra(EXTRA_RUN4_FIXTURE, false) ||
-                    intent.getBooleanExtra(EXTRA_RUN5_FIXTURE, false) ||
-                    intent.getBooleanExtra(EXTRA_RUN6_FIXTURE, false)
-                )
-            if (!stabilizedFixture) productionLayers.addAll(listOf(
-                "vitalis/final-ux-core.js",
-                "vitalis/final-ux.js"
-            ))
-            productionLayers
-                .joinToString("\n;\n") { asset ->
-                    assets.open(asset).bufferedReader().use { it.readText() }
-                }
+        if (!stabilizedFixture) productionLayers.addAll(listOf(
+            "vitalis/final-ux-core.js",
+            "vitalis/final-ux.js"
+        ))
+
+        val scripts = mutableListOf(buildNativeProxyBootstrap())
+        val loadedLayers = runCatching {
+            productionLayers.map { asset ->
+                assets.open(asset).bufferedReader().use { it.readText() }
+            }
         }.getOrNull() ?: return
-        view.evaluateJavascript(buildNativeProxyBootstrap() + "\n;\n" + script, null)
+        scripts.addAll(loadedLayers)
+
+        // Evaluate the bundled layers one by one. A runtime failure in a legacy/remote
+        // compatibility layer must not prevent the local Final UX dashboard from mounting.
+        fun evaluateLayer(index: Int) {
+            if (index >= scripts.size) {
+                if (!stabilizedFixture) verifyFinalUxMounted(view, 0)
+                return
+            }
+            view.evaluateJavascript(scripts[index]) {
+                evaluateLayer(index + 1)
+            }
+        }
+        evaluateLayer(0)
+    }
+
+    private fun verifyFinalUxMounted(view: WebView, attempt: Int) {
+        if (!::webView.isInitialized || view !== webView) return
+        view.evaluateJavascript(
+            """
+                (function(){
+                  return !!window.VitalisFinalUX &&
+                    !!document.querySelector('#vitalis-final-ux') &&
+                    !!document.querySelector('[data-widgets]') &&
+                    document.querySelectorAll('[data-widget]').length > 0;
+                })();
+            """.trimIndent()
+        ) { result ->
+            if (result == "true") return@evaluateJavascript
+            if (attempt >= FINAL_UX_RECOVERY_ATTEMPTS) {
+                // A remote page can finish loading while still exposing only an empty shell.
+                // In that case use the bundled local Vitalis UI rather than leaving a blank app.
+                if (requestHost(view.url.orEmpty()) == VITALIS_HOST) loadOfflineFallback()
+                return@evaluateJavascript
+            }
+            Handler(Looper.getMainLooper()).postDelayed({
+                if (!::webView.isInitialized || view !== webView) return@postDelayed
+                val recoveryScripts = runCatching {
+                    listOf(
+                        assets.open("vitalis/vitalis-3.12.js").bufferedReader().use { it.readText() },
+                        assets.open("vitalis/final-ux-core.js").bufferedReader().use { it.readText() },
+                        assets.open("vitalis/final-ux.js").bufferedReader().use { it.readText() }
+                    )
+                }.getOrNull() ?: return@postDelayed
+                val recovery = """
+                    if (!window.VitalisCoaches) window.__vitalisPowerLayer312 = false;
+                    if (!document.querySelector('#vitalis-final-ux')) window.__vitalisFinalUx = false;
+                """.trimIndent() + "\n;\n" + recoveryScripts.joinToString("\n;\n")
+                view.evaluateJavascript(recovery) {
+                    verifyFinalUxMounted(view, attempt + 1)
+                }
+            }, FINAL_UX_RECOVERY_DELAY_MS)
+        }
     }
 
     override fun onResume() {
@@ -3349,6 +3402,8 @@ class MainActivity : ComponentActivity() {
         )
         private const val REMOTE_LOAD_TIMEOUT_MS = 30_000L
         private const val REMOTE_RETRY_DELAY_MS = 2_000L
+        private const val FINAL_UX_RECOVERY_ATTEMPTS = 3
+        private const val FINAL_UX_RECOVERY_DELAY_MS = 450L
         private const val CONNECTOR_RETURN_REFRESH_DELAY_MS = 700L
         private const val MAX_REMOTE_RETRIES = 2
         private const val MAX_SPEECH_TEXT_LENGTH = 8_000
