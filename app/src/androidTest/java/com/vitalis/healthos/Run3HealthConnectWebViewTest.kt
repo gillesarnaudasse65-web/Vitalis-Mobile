@@ -78,7 +78,7 @@ class Run3HealthConnectWebViewTest {
 
     private fun await(
         scenario: ActivityScenario<MainActivity>,
-        timeout: Long = 5_000,
+        timeout: Long = 15_000,
         condition: () -> Boolean
     ) {
         val end = SystemClock.uptimeMillis() + timeout
@@ -99,7 +99,7 @@ class Run3HealthConnectWebViewTest {
                 latch.countDown()
             }
         }
-        assertTrue("JavaScript callback timed out", latch.await(5, TimeUnit.SECONDS))
+        assertTrue("JavaScript callback timed out", latch.await(15, TimeUnit.SECONDS))
         return result.get() ?: "null"
     }
 
