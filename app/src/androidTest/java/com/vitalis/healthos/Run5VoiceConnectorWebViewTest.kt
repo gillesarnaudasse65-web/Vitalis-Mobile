@@ -40,7 +40,7 @@ class Run5VoiceConnectorWebViewTest {
             assertTrue(result.getBoolean("staleFinalRejected"))
             assertTrue(result.getBoolean("cancelledFinalRejected"))
             assertEquals("RETRY", result.getString("firstRetry"))
-            assertEquals("END_SESSION", result.getString("secondRetry"))
+            assertEquals("LAUNCH_FALLBACK", result.getString("secondRetry"))
             assertTrue(result.getBoolean("oldTtsCallbackRejected"))
             assertTrue(result.getBoolean("ttsStopped"))
             assertEquals("HEALTH_CONNECT_PERMISSION_REQUIRED", result.getString("permissionRequired"))

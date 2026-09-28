@@ -1839,11 +1839,11 @@ class MainActivity : ComponentActivity() {
         retry.markListening("fixture-retry")
         val firstRetry = retry.handleError(
             "fixture-retry",
-            RecognitionErrorCategory.SERVICE_UNAVAILABLE
+            RecognitionErrorCategory.RECOVERABLE
         )
         val secondRetry = retry.handleError(
             "fixture-retry",
-            RecognitionErrorCategory.SERVICE_UNAVAILABLE
+            RecognitionErrorCategory.RECOVERABLE
         )
 
         val tts = TtsSessionCoordinator().apply { initialized(true) }
