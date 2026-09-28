@@ -87,7 +87,7 @@ class VoiceReliabilityTest {
             coordinator.handleError("voice-1", RecognitionErrorCategory.RECOVERABLE)
         )
         assertEquals(
-            RecognitionErrorAction.END_SESSION,
+            RecognitionErrorAction.LAUNCH_FALLBACK,
             coordinator.handleError("voice-1", RecognitionErrorCategory.RECOVERABLE)
         )
         assertEquals(1, coordinator.snapshot().retryCount)
