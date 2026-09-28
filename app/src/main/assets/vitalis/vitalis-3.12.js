@@ -12,6 +12,7 @@
   var pending = {};
   var conversations = {};
   var activeNutritionScan = null;
+  var nutritionGateRoot = null;
   var connectorState = readJsonBridge("getConnectorStatus", {connectors:[], connectorCount:0});
   var recoveredNutritionScan = readJsonBridge("getPendingNutritionScan", null);
   if (recoveredNutritionScan && recoveredNutritionScan.scanId) {
@@ -106,6 +107,7 @@
       ".vitalis-developer-card-312{display:flex;align-items:center;gap:12px;border:1px solid #cfdcd6;border-radius:18px;padding:13px;background:linear-gradient(135deg,#f0f7f4,#fff);width:100%;text-align:left;color:#14342b}" +
       ".vitalis-developer-icon-312{width:54px;height:54px;border-radius:17px;background:#063c30;color:#fff;display:grid;place-items:center;font-size:24px}" +
       ".vitalis-ai-avatar-312{width:48px;height:48px;border-radius:15px;object-fit:cover;object-position:center 30%}" +
+      ".vitalis-voice-status-312{font-size:12px;color:#405c53;padding:7px 2px;display:flex;align-items:center;justify-content:space-between;gap:8px}.vitalis-voice-status-312 button{border:0;border-radius:10px;padding:7px 9px;background:#e4ece8;color:#173f33;font-weight:700}" +
       ".vitalis-agent-chip-312{display:inline-block;border-radius:999px;background:#e2f3e9;color:#063c30;padding:5px 8px;font-size:10px;font-weight:800;margin-top:4px}" +
       ".vitalis-developer-response-312{white-space:pre-wrap;background:#fff;border:1px solid #e0e7e3;border-radius:16px;padding:13px;line-height:1.5;font-size:13px;margin:10px 0}" +
       ".vitalis-meal-grid-312{display:grid;grid-template-columns:1fr 1fr;gap:9px}.vitalis-meal-grid-312 label{font-size:11px;color:#687970}.vitalis-meal-grid-312 input{width:100%;box-sizing:border-box;margin-top:4px;border:1px solid #cad7d1;border-radius:11px;padding:10px;background:#fff}" +
@@ -333,6 +335,7 @@
       '<button class="vitalis-ai-icon" data-agent-voice title="Activer ou couper la voix">🔊</button>' +
       '<button class="vitalis-ai-icon" data-agent-settings title="Réglages IA">⚙</button>',
       '<div class="vitalis-ai-chat" data-agent-chat></div>' +
+      '<div class="vitalis-voice-status-312" data-agent-voice-status aria-live="polite">Ready</div>' +
       '<div class="vitalis-ai-compose"><button class="vitalis-ai-icon" data-agent-mic title="Dicter">🎙️</button>' +
       '<textarea rows="2" data-agent-input placeholder="Demandez conseil à ' + esc(coach.name) + '…"></textarea>' +
       '<button class="vitalis-ai-send" data-agent-send>Envoyer</button></div>',
@@ -602,6 +605,74 @@
     bridge.analyzeMealSession(scan.scanId, requestId);
   }
 
+  function closeNutritionGate() {
+    if (nutritionGateRoot && nutritionGateRoot.isConnected) nutritionGateRoot.remove();
+    nutritionGateRoot = null;
+  }
+
+  function renderNutritionReadiness(detail) {
+    if (!activeNutritionScan || detail.scanId !== activeNutritionScan.scanId) return;
+    var scan = activeNutritionScan;
+    scan.aiConfigured = !!detail.aiConfigured;
+    scan.consented = !!detail.consented;
+    scan.uiState = detail.uiState || "PHOTO_READY";
+    closeNutritionGate();
+    if (scan.uiState === "ANALYZING" || scan.uiState === "ANALYSIS_SUCCESS") return;
+    var preview = scan.preview
+      ? '<img class="vitalis-meal-preview-312" src="' + esc(scan.preview) + '" alt="Photo normalisée du repas">'
+      : "";
+    var keyLabel = scan.aiConfigured ? "IA configurée" : "Configuration IA requise";
+    if (scan.uiState === "AI_KEY_REQUIRED") {
+      nutritionGateRoot = overlay(
+        '<div><h3>Photo prête</h3><div class="vitalis-agent-chip-312">' + keyLabel + '</div></div>',
+        preview +
+        '<p class="vitalis-ai-note">Photo prête. Configurez la clé IA pour lancer l’analyse.</p>' +
+        '<div class="vitalis-meal-actions-312"><button class="vitalis-ai-primary" data-nutrition-key>Configurer la clé IA</button><button class="vitalis-meal-secondary-312" data-manual-nutrition>Correction manuelle</button><button class="vitalis-meal-secondary-312" data-cancel-nutrition>Annuler</button></div>'
+      );
+      nutritionGateRoot.querySelector("[data-nutrition-key]").onclick = function () {
+        if (bridge && bridge.openKeySettings) bridge.openKeySettings("health");
+      };
+    } else if (scan.uiState === "AI_CONSENT_REQUIRED") {
+      nutritionGateRoot = overlay(
+        '<div><h3>Consentement requis</h3><div class="vitalis-agent-chip-312">' + keyLabel + '</div></div>',
+        preview +
+        '<p class="vitalis-ai-note">Votre photo est prête. Votre consentement est requis avant son envoi à OpenAI.</p>' +
+        '<div class="vitalis-meal-actions-312"><button class="vitalis-ai-primary" data-nutrition-consent>Autoriser et analyser</button><button class="vitalis-meal-secondary-312" data-manual-nutrition>Correction manuelle</button><button class="vitalis-meal-secondary-312" data-cancel-nutrition>Annuler</button></div>'
+      );
+      nutritionGateRoot.querySelector("[data-nutrition-consent]").onclick = function () {
+        scan.analyzeWhenReady = true;
+        if (bridge && bridge.setAiHealthConsent) bridge.setAiHealthConsent(true);
+      };
+    } else if (scan.uiState === "READY_FOR_ANALYSIS") {
+      if (scan.analyzeWhenReady) {
+        scan.analyzeWhenReady = false;
+        analyzeNutritionScan(scan.scanId);
+        return;
+      }
+      nutritionGateRoot = overlay(
+        '<div><h3>Photo prête</h3><div class="vitalis-agent-chip-312">' + keyLabel + '</div></div>',
+        preview +
+        '<p class="vitalis-ai-note">La photo est validée localement. Elle peut maintenant être envoyée pour analyse.</p>' +
+        '<div class="vitalis-meal-actions-312"><button class="vitalis-ai-primary" data-nutrition-analyze>Analyser la photo</button><button class="vitalis-meal-secondary-312" data-manual-nutrition>Correction manuelle</button><button class="vitalis-meal-secondary-312" data-cancel-nutrition>Annuler</button></div>'
+      );
+      nutritionGateRoot.querySelector("[data-nutrition-analyze]").onclick = function () {
+        closeNutritionGate();
+        analyzeNutritionScan(scan.scanId);
+      };
+    } else return;
+    var manual = nutritionGateRoot.querySelector("[data-manual-nutrition]");
+    var cancel = nutritionGateRoot.querySelector("[data-cancel-nutrition]");
+    if (manual) manual.onclick = function () {
+      closeNutritionGate();
+      showMealReview({reviewable:true,savable:true,errors:[],warnings:["manual_entry"],estimate:{mealName:"",foodItems:[],portionDescription:null,confidence:0,uncertaintyNotes:"Saisie manuelle."}}, scan);
+    };
+    if (cancel) cancel.onclick = function () {
+      if (bridge && bridge.cancelNutritionScan) bridge.cancelNutritionScan(scan.scanId);
+      activeNutritionScan = null;
+      closeNutritionGate();
+    };
+  }
+
   function chooseNutritionSource() {
     var root = overlay(
       '<div><h3>Scanner un repas</h3><div class="vitalis-agent-chip-312">Sélection locale sécurisée</div></div>',
@@ -696,35 +767,19 @@
     activeNutritionScan.preview = detail.preview || null;
     activeNutritionScan.metadata = detail.metadata || null;
     var status = document.querySelector("[data-nutrition-status]");
-    if (status) status.textContent = "Photo validée et normalisée. Analyse en cours…";
-    if (!healthAiConfigured() && activeNutritionScan.source !== "synthetic_test") {
-      var scan = activeNutritionScan;
-      var root = overlay(
-        '<div><h3>Consentement requis</h3><div class="vitalis-agent-chip-312">Aucun envoi effectué</div></div>',
-        '<img class="vitalis-meal-preview-312" src="' + esc(scan.preview) + '" alt="Photo normalisée du repas">' +
-        '<p class="vitalis-ai-note">La sélection et la normalisation sont locales. L’analyse enverra cette photo au service IA externe OpenAI.</p>' +
-        '<div class="vitalis-meal-actions-312"><button class="vitalis-ai-primary" data-configure-nutrition>Configurer et consentir</button><button class="vitalis-meal-secondary-312" data-manual-nutrition>Correction manuelle</button><button class="vitalis-meal-secondary-312" data-cancel-nutrition>Annuler</button></div>'
-      );
-      root.querySelector("[data-configure-nutrition]").onclick = function () {
-        configureHealthAi(coachById("nutrition"), function () { analyzeNutritionScan(scan.scanId); });
-      };
-      root.querySelector("[data-manual-nutrition]").onclick = function () {
-        root.remove();
-        showMealReview({reviewable:true,savable:true,errors:[],warnings:["manual_entry"],estimate:{mealName:"",foodItems:[],portionDescription:null,confidence:0,uncertaintyNotes:"Saisie manuelle."}}, scan);
-      };
-      root.querySelector("[data-cancel-nutrition]").onclick = function () {
-        bridge.cancelNutritionScan(scan.scanId); activeNutritionScan = null; root.remove();
-      };
-      return;
-    }
-    analyzeNutritionScan(detail.scanId);
+    if (status) status.textContent = "Photo validée et normalisée.";
+    if (activeNutritionScan.source === "synthetic_test") analyzeNutritionScan(detail.scanId);
+  });
+
+  window.addEventListener("vitalis-nutrition-analysis-readiness", function (event) {
+    renderNutritionReadiness(event.detail || {});
   });
 
   window.addEventListener("vitalis-nutrition-scan-state", function (event) {
     var detail = event.detail || {};
     if (!activeNutritionScan || detail.scanId !== activeNutritionScan.scanId) return;
     var status = document.querySelector("[data-nutrition-status]");
-    if (status) status.textContent = {
+    if (status) status.textContent = detail.message || {
       selecting_image:"Sélection de la photo…", normalizing:"Validation et normalisation locales…",
       ready_for_analysis:"Photo prête pour l’analyse.", analyzing:"Analyse nutritionnelle externe en cours…",
       review:"Estimation prête à vérifier.", saving:"Enregistrement local…",
@@ -851,6 +906,30 @@
       input.focus();
     }
     if (bridge && bridge.stopVoiceInput) bridge.stopVoiceInput();
+  });
+
+  window.addEventListener("vitalis-voice-state", function (event) {
+    var detail = event.detail || {};
+    var root = document.querySelector(".vitalis-coach-overlay-312");
+    if (!root) return;
+    var mic = root.querySelector("[data-agent-mic]");
+    var status = root.querySelector("[data-agent-voice-status]");
+    if (mic) {
+      mic.textContent = detail.microphoneEnabled ? "⏹" : "🎙️";
+      mic.setAttribute("aria-pressed", detail.microphoneEnabled ? "true" : "false");
+    }
+    if (status) {
+      status.textContent = detail.message || "Recognition failed";
+      if (detail.action === "open_app_settings") {
+        var action = document.createElement("button");
+        action.type = "button";
+        action.textContent = "Open App Settings";
+        action.onclick = function () {
+          if (bridge && bridge.openAppSettings) bridge.openAppSettings();
+        };
+        status.appendChild(action);
+      }
+    }
   });
 
   document.addEventListener("click", function (event) {

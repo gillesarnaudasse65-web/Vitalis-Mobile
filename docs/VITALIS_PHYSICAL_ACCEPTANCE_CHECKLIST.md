@@ -4,6 +4,8 @@ This checklist uses GitHub Web and the Android phone only. No terminal, ADB, And
 
 Do not record personal health values, account identifiers, device serial numbers, API keys, passwords, or other secrets. Use synthetic test data only.
 
+QA hotfix note (2026-09-28): a phone run confirmed installation, launch, and camera capture, but voice recognition and meal-photo analysis failed. Those observations belong to the QA hotfix retest and do not satisfy the production-signature prerequisites below. Download `Vitalis-3.15.0-rc1-physical-hotfix-qa` for the scoped retest; keep the final production acceptance state unchanged until all prerequisites exist.
+
 ## Prerequisites
 
 - [ ] The production-signing certificate SHA-256 is recorded in `VITALIS_SIGNING_IDENTITY.md`.

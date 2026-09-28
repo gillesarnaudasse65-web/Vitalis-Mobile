@@ -121,9 +121,13 @@ jobs:
       - name: Generate release SHA-256 checksums
         run: |
           mkdir -p app/build/distributions
+          cp app/build/outputs/apk/release/app-release.apk \
+            app/build/distributions/Vitalis-3.15.0-rc1-physical-hotfix-qa.apk
+          cp app/build/outputs/bundle/release/app-release.aab \
+            app/build/distributions/Vitalis-3.15.0-rc1-physical-hotfix-qa.aab
           sha256sum \
-            app/build/outputs/apk/release/app-release.apk \
-            app/build/outputs/bundle/release/app-release.aab \
+            app/build/distributions/Vitalis-3.15.0-rc1-physical-hotfix-qa.apk \
+            app/build/distributions/Vitalis-3.15.0-rc1-physical-hotfix-qa.aab \
             app/build/outputs/mapping/release/mapping.txt \
             > app/build/distributions/vitalis-sha256.txt
       - name: Verify and record release signatures
@@ -151,10 +155,10 @@ jobs:
       - name: Upload release candidate artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: Vitalis-3.15.0-rc1-qa-test-signed
+          name: Vitalis-3.15.0-rc1-physical-hotfix-qa
           path: |
-            app/build/outputs/apk/release/app-release.apk
-            app/build/outputs/bundle/release/app-release.aab
+            app/build/distributions/Vitalis-3.15.0-rc1-physical-hotfix-qa.apk
+            app/build/distributions/Vitalis-3.15.0-rc1-physical-hotfix-qa.aab
             app/build/outputs/mapping/release/mapping.txt
             app/build/distributions/vitalis-sha256.txt
             app/build/distributions/vitalis-signature-report.txt

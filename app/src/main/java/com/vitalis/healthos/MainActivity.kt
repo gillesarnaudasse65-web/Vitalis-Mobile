@@ -15,6 +15,7 @@ import android.net.Uri
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.provider.Settings
 import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
@@ -109,6 +110,9 @@ class MainActivity : ComponentActivity() {
     private val recognitionSessionCoordinator = RecognitionSessionCoordinator()
     private val voiceHandler = Handler(Looper.getMainLooper())
     private var pendingVoiceRetry: Runnable? = null
+    private var pendingVoiceFallbackSessionId: String? = null
+    private var voiceFallbackInProgress = false
+    private var microphonePermissionPreviouslyRequested = false
     private var lastHealthConnectPermissionGranted = false
     private lateinit var dateState: SelectedDateState
     private var selectedHealthDate: LocalDate
@@ -214,18 +218,44 @@ class MainActivity : ComponentActivity() {
     ) { granted ->
         val sessionId = recognitionSessionCoordinator.snapshot().sessionId
             ?: return@registerForActivityResult
+        val hadRequestedBefore = microphonePermissionPreviouslyRequested
+        microphonePermissionPreviouslyRequested = true
+        appPreferences.edit { putBoolean(MICROPHONE_PERMISSION_REQUESTED_KEY, true) }
         if (granted) {
             recognitionSessionCoordinator.permissionGranted(sessionId)
             startMicrophoneInternal(sessionId)
         } else {
             microphoneEnabled = false
-            val permanentlyDenied = !shouldShowRequestPermissionRationale(Manifest.permission.RECORD_AUDIO)
+            val permanentlyDenied = hadRequestedBefore &&
+                !shouldShowRequestPermissionRationale(Manifest.permission.RECORD_AUDIO)
             recognitionSessionCoordinator.permissionDenied(sessionId, permanentlyDenied)
             dispatchVoiceEvent(
                 "microphone",
                 if (permanentlyDenied) "permission_permanently_denied" else "permission_denied",
                 false
             )
+        }
+    }
+
+    private val voiceFallbackLauncher = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        voiceFallbackInProgress = false
+        val sessionId = pendingVoiceFallbackSessionId
+        pendingVoiceFallbackSessionId = null
+        if (sessionId == null || !recognitionSessionCoordinator.isCurrent(sessionId)) {
+            return@registerForActivityResult
+        }
+        val matches = if (result.resultCode == Activity.RESULT_OK) {
+            result.data?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS).orEmpty()
+        } else emptyList()
+        val finalText = matches.firstOrNull().orEmpty()
+        if (recognitionSessionCoordinator.consumeFinal(sessionId, finalText)) {
+            dispatchSpeechResults(sessionId, matches, VoiceResultKind.FINAL)
+            finishVoiceSession(sessionId, "idle")
+        } else {
+            dispatchVoiceEvent("microphone", "fallback_cancelled", false)
+            finishVoiceSession(sessionId, "idle")
         }
     }
 
@@ -276,6 +306,10 @@ class MainActivity : ComponentActivity() {
                 java.time.ZoneId.systemDefault()) } ?: Clock.systemDefaultZone()
         } else Clock.systemDefaultZone()
         appPreferences = getSharedPreferences(APP_PREFS, MODE_PRIVATE)
+        microphonePermissionPreviouslyRequested = appPreferences.getBoolean(
+            MICROPHONE_PERMISSION_REQUESTED_KEY,
+            false
+        )
         secureSecretStore = SecureSecretStore(this)
         localDataStore = VitalisLocalDataStore(this)
         aiConsentCoordinator = AiConsentCoordinator(
@@ -572,6 +606,9 @@ class MainActivity : ComponentActivity() {
                 }
             }
             refreshNativeProxyState()
+            nutritionScanCoordinator.active()?.takeIf {
+                normalizedNutritionImages.containsKey(it.scanId)
+            }?.let(::dispatchNutritionReadiness)
         }
         if (refreshAfterConnectorReturn && ::webView.isInitialized) {
             refreshAfterConnectorReturn = false
@@ -616,7 +653,9 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onStop() {
-        stopMicrophone("activity_background", cancelled = true)
+        if (!voiceFallbackInProgress) {
+            stopMicrophone("activity_background", cancelled = true)
+        }
         stopSpeaking("activity_background")
         super.onStop()
     }
@@ -630,6 +669,8 @@ class MainActivity : ComponentActivity() {
         filePathCallback?.onReceiveValue(null)
         filePathCallback = null
         stopMicrophone("activity_destroyed", cancelled = true)
+        voiceFallbackInProgress = false
+        pendingVoiceFallbackSessionId = null
         speechRecognizer?.destroy()
         speechRecognizer = null
         stopSpeaking("activity_destroyed")
@@ -740,6 +781,7 @@ class MainActivity : ComponentActivity() {
         "openOfflineMode" -> loadOfflineFallback().let { true }
         "openClassicInterface" -> openClassicInterface().let { true }
         "openHealthConnectSettings" -> openHealthConnectSettings().let { true }
+        "openAppSettings" -> openAppSettings().let { true }
         "openExternalUrl" -> openSafeExternalUrl(args.optString(0)).let { true }
         "openPrivacyDataSettings" -> startActivity(
             Intent(this, PrivacyDataActivity::class.java)
@@ -792,6 +834,14 @@ class MainActivity : ComponentActivity() {
     private fun openHealthConnectSettings() {
         try { startActivity(Intent(HealthConnectClient.ACTION_HEALTH_CONNECT_SETTINGS)) }
         catch (_: ActivityNotFoundException) { openHealthConnectStore() }
+    }
+
+    private fun openAppSettings() {
+        runCatching {
+            startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                data = Uri.fromParts("package", packageName, null)
+            })
+        }
     }
 
     private fun nativeProxyState(): JSONObject = JSONObject().apply {
@@ -875,6 +925,7 @@ class MainActivity : ComponentActivity() {
                 openOfflineMode:function(){call("openOfflineMode",[])},
                 openClassicInterface:function(){call("openClassicInterface",[])},
                 openHealthConnectSettings:function(){call("openHealthConnectSettings",[])},
+                openAppSettings:function(){call("openAppSettings",[])},
                 openExternalUrl:function(v){call("openExternalUrl",[v])},
                 syncWebLocalData:function(v){call("syncWebLocalData",[v]);return true}
               };
@@ -1011,15 +1062,24 @@ class MainActivity : ComponentActivity() {
             microphoneEnabled = false
             recognitionSessionCoordinator.markUnavailable(sessionId)
             dispatchVoiceEvent("microphone", "unavailable", false)
+            launchVoiceFallback(sessionId)
             return
         }
         pendingVoiceRetry?.let(voiceHandler::removeCallbacks)
         pendingVoiceRetry = null
         runCatching { speechRecognizer?.cancel() }
         runCatching { speechRecognizer?.destroy() }
-        speechRecognizer = SpeechRecognizer.createSpeechRecognizer(this).apply {
-            setRecognitionListener(recognitionListener(sessionId))
+        val recognizer = runCatching {
+            SpeechRecognizer.createSpeechRecognizer(this).apply {
+                setRecognitionListener(recognitionListener(sessionId))
+            }
+        }.getOrElse {
+            recognitionSessionCoordinator.handleError(sessionId, RecognitionErrorCategory.START_FAILURE)
+            dispatchVoiceEvent("microphone", "start_failed", false)
+            launchVoiceFallback(sessionId)
+            return
         }
+        speechRecognizer = recognizer
         microphoneEnabled = true
         startRecognitionAttempt(sessionId)
     }
@@ -1049,14 +1109,12 @@ class MainActivity : ComponentActivity() {
         override fun onError(error: Int) {
             if (!recognitionSessionCoordinator.isCurrent(sessionId)) return
             val action = recognitionSessionCoordinator.handleError(sessionId, recognitionErrorCategory(error))
-            dispatchVoiceEvent("microphone", "error_$error", false)
+            dispatchVoiceEvent("microphone", recognitionErrorStatus(error), false)
             when (action) {
                 RecognitionErrorAction.RETRY -> scheduleMicrophoneRetry(sessionId, 700L)
-                RecognitionErrorAction.RETURN_TO_IDLE,
-                RecognitionErrorAction.END_SESSION -> {
-                    microphoneEnabled = false
-                    pendingVoiceRetry = null
-                }
+                RecognitionErrorAction.LAUNCH_FALLBACK -> launchVoiceFallback(sessionId)
+                RecognitionErrorAction.RETURN_TO_IDLE -> finishVoiceSession(sessionId, "idle")
+                RecognitionErrorAction.END_SESSION -> finishVoiceSession(sessionId, "failed")
             }
         }
 
@@ -1065,9 +1123,7 @@ class MainActivity : ComponentActivity() {
             val text = matches.firstOrNull().orEmpty()
             if (!recognitionSessionCoordinator.consumeFinal(sessionId, text)) return
             dispatchSpeechResults(sessionId, matches, VoiceResultKind.FINAL)
-            microphoneEnabled = false
-            recognitionSessionCoordinator.finish(sessionId)
-            dispatchVoiceEvent("microphone", "idle", false)
+            finishVoiceSession(sessionId, "idle")
         }
 
         override fun onPartialResults(partialResults: Bundle?) {
@@ -1090,12 +1146,39 @@ class MainActivity : ComponentActivity() {
             putExtra(RecognizerIntent.EXTRA_LANGUAGE, Locale.getDefault().toLanguageTag())
         }
         runCatching {
-            speechRecognizer?.startListening(intent)
+            requireNotNull(speechRecognizer) { "recognizer_missing" }.startListening(intent)
             dispatchVoiceEvent("microphone", "starting", true)
         }.onFailure {
             microphoneEnabled = false
-            recognitionSessionCoordinator.handleError(sessionId, RecognitionErrorCategory.FATAL)
+            recognitionSessionCoordinator.handleError(sessionId, RecognitionErrorCategory.START_FAILURE)
             dispatchVoiceEvent("microphone", "start_failed", false)
+            launchVoiceFallback(sessionId)
+        }
+    }
+
+    private fun launchVoiceFallback(sessionId: String) {
+        if (!recognitionSessionCoordinator.isCurrent(sessionId)) return
+        pendingVoiceRetry?.let(voiceHandler::removeCallbacks)
+        pendingVoiceRetry = null
+        runCatching { speechRecognizer?.cancel() }
+        runCatching { speechRecognizer?.destroy() }
+        speechRecognizer = null
+        microphoneEnabled = false
+        if (!recognitionSessionCoordinator.markFallback(sessionId)) return
+        val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+            putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 3)
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE, Locale.getDefault().toLanguageTag())
+            putExtra(RecognizerIntent.EXTRA_PROMPT, "Parlez maintenant")
+        }
+        pendingVoiceFallbackSessionId = sessionId
+        voiceFallbackInProgress = true
+        dispatchVoiceEvent("microphone", "fallback_starting", true)
+        runCatching { voiceFallbackLauncher.launch(intent) }.onFailure {
+            voiceFallbackInProgress = false
+            pendingVoiceFallbackSessionId = null
+            dispatchVoiceEvent("microphone", "failed", false)
+            finishVoiceSession(sessionId, "idle")
         }
     }
 
@@ -1122,16 +1205,39 @@ class MainActivity : ComponentActivity() {
         dispatchVoiceEvent("microphone", "idle", false)
     }
 
+    private fun finishVoiceSession(sessionId: String, terminalStatus: String) {
+        pendingVoiceRetry?.let(voiceHandler::removeCallbacks)
+        pendingVoiceRetry = null
+        microphoneEnabled = false
+        runCatching { speechRecognizer?.cancel() }
+        if (terminalStatus != "idle") {
+            dispatchVoiceEvent("microphone", terminalStatus, false)
+        }
+        recognitionSessionCoordinator.finish(sessionId)
+        dispatchVoiceEvent("microphone", "idle", false)
+    }
+
     private fun recognitionErrorCategory(error: Int): RecognitionErrorCategory = when (error) {
         SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS -> RecognitionErrorCategory.PERMISSION
         SpeechRecognizer.ERROR_NO_MATCH,
         SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> RecognitionErrorCategory.NO_SPEECH
         SpeechRecognizer.ERROR_NETWORK,
-        SpeechRecognizer.ERROR_NETWORK_TIMEOUT,
+        SpeechRecognizer.ERROR_NETWORK_TIMEOUT -> RecognitionErrorCategory.NETWORK
         SpeechRecognizer.ERROR_AUDIO -> RecognitionErrorCategory.RECOVERABLE
-        SpeechRecognizer.ERROR_SERVER,
-        SpeechRecognizer.ERROR_RECOGNIZER_BUSY -> RecognitionErrorCategory.SERVICE_UNAVAILABLE
+        SpeechRecognizer.ERROR_RECOGNIZER_BUSY -> RecognitionErrorCategory.MICROPHONE_BUSY
+        SpeechRecognizer.ERROR_SERVER -> RecognitionErrorCategory.SERVICE_UNAVAILABLE
         else -> RecognitionErrorCategory.FATAL
+    }
+
+    private fun recognitionErrorStatus(error: Int): String = when (error) {
+        SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS -> "permission_denied"
+        SpeechRecognizer.ERROR_NO_MATCH,
+        SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> "no_speech"
+        SpeechRecognizer.ERROR_NETWORK,
+        SpeechRecognizer.ERROR_NETWORK_TIMEOUT -> "network_error"
+        SpeechRecognizer.ERROR_RECOGNIZER_BUSY -> "microphone_busy"
+        SpeechRecognizer.ERROR_SERVER -> "unavailable"
+        else -> "failed"
     }
 
     private fun stopSpeaking(reason: String) {
@@ -1161,8 +1267,11 @@ class MainActivity : ComponentActivity() {
         val recognition = recognitionSessionCoordinator.snapshot()
         val speech = ttsSessionCoordinator.snapshot()
         val payload = JSONObject().apply {
+            val presentation = VoiceUserStatusCatalog.forStatus(status)
             put("type", type)
             put("status", status)
+            put("message", presentation.label)
+            put("action", presentation.action ?: JSONObject.NULL)
             put("active", active)
             put("microphoneEnabled", microphoneEnabled)
             put("speaking", textToSpeech?.isSpeaking == true)
@@ -1265,7 +1374,7 @@ class MainActivity : ComponentActivity() {
         responseTransform: (String) -> String = { it },
         responseGuard: () -> Boolean = { true },
         onAccepted: (String) -> Unit = {},
-        onRejected: (String) -> Unit = {}
+        onRejected: (AiRequestFailure) -> Unit = {}
     ): Job {
         val context = if (includeHealthContext) {
             "\n\nDonnées Vitalis disponibles (peuvent être incomplètes) : ${sanitizedHealthContext()}"
@@ -1312,15 +1421,15 @@ class MainActivity : ComponentActivity() {
                 throw cancelled
             } catch (error: Exception) {
                 if (responseGuard()) {
-                    val message = error.message?.take(300)
-                        ?: "Le service IA est momentanément indisponible."
-                    onRejected(message)
+                    val failure = AiRequestFailureClassifier.classify(error)
+                    onRejected(failure)
                     dispatchAiResponse(
                         requestId,
                         false,
                         "",
-                        message,
-                        agentId
+                        failure.userMessage,
+                        agentId,
+                        failure.code
                     )
                 }
             }
@@ -1346,10 +1455,7 @@ class MainActivity : ComponentActivity() {
                 BufferedReader(InputStreamReader(stream, StandardCharsets.UTF_8)).readText()
             }.orEmpty()
             if (status !in 200..299) {
-                val apiMessage = runCatching {
-                    JSONObject(responseText).optJSONObject("error")?.optString("message")
-                }.getOrNull()
-                throw IllegalStateException(apiMessage?.takeIf { it.isNotBlank() } ?: "Erreur OpenAI HTTP $status")
+                throw OpenAiHttpException(status)
             }
             return JSONObject(responseText)
         } finally {
@@ -1371,7 +1477,7 @@ class MainActivity : ComponentActivity() {
         }
         return parts.joinToString("\n").trim()
             .takeIf { it.isNotBlank() }
-            ?: throw IllegalStateException("La réponse IA reçue est vide.")
+            ?: throw InvalidAiResponseException()
     }
 
     private fun dispatchAiResponse(
@@ -1379,13 +1485,15 @@ class MainActivity : ComponentActivity() {
         ok: Boolean,
         text: String,
         error: String?,
-        agentId: String
+        agentId: String,
+        errorCode: String? = null
     ) {
         dispatchWebEvent("vitalis-ai-response", JSONObject().apply {
             put("requestId", requestId)
             put("ok", ok)
             put("text", text)
             put("error", error ?: JSONObject.NULL)
+            put("errorCode", errorCode ?: JSONObject.NULL)
             put("agentId", agentId)
             put("model", if (ok) OPENAI_MODEL else JSONObject.NULL)
         })
@@ -1531,7 +1639,9 @@ class MainActivity : ComponentActivity() {
             put("selectedDate", session.selectedDate.toString())
             put("preview", image.dataUrl)
             put("metadata", normalizedImageMetadataJson(image.metadata))
+            put("state", NutritionUiState.PHOTO_READY.name)
         })
+        dispatchNutritionReadiness(session)
     }
 
     private fun cancelCurrentNutritionScan(reason: String) {
@@ -1561,18 +1671,30 @@ class MainActivity : ComponentActivity() {
             dispatchAiResponse(requestId, false, "", "Photo normalisée indisponible.", "nutrition")
             return
         }
+        val apiKey = readOpenAiKey()
+        if (apiKey == null && !isRun4Fixture()) {
+            dispatchNutritionReadiness(session)
+            dispatchAiResponse(
+                requestId, false, "", "Clé API requise pour analyser cette photo.",
+                "nutrition", "ai_key_required"
+            )
+            return
+        }
         if (!hasAiHealthConsentInternal()) {
-            dispatchAiResponse(requestId, false, "", "Consentement requis avant l’envoi externe.", "nutrition")
+            dispatchNutritionReadiness(session)
+            dispatchAiResponse(
+                requestId, false, "", "Consentement requis avant l’envoi externe.",
+                "nutrition", "ai_consent_required"
+            )
             return
         }
         val consentToken = if (isRun4Fixture()) null else aiConsentCoordinator.begin()
         if (!isRun4Fixture() && consentToken == null) {
-            dispatchAiResponse(requestId, false, "", "Consentement requis avant l’envoi externe.", "nutrition")
-            return
-        }
-        val apiKey = readOpenAiKey()
-        if (apiKey == null && !isRun4Fixture()) {
-            dispatchAiResponse(requestId, false, "", "Clé OpenAI non configurée.", "nutrition")
+            dispatchNutritionReadiness(session)
+            dispatchAiResponse(
+                requestId, false, "", "Consentement requis avant l’envoi externe.",
+                "nutrition", "ai_consent_required"
+            )
             return
         }
         activeNutritionAnalysisJob?.cancel()
@@ -1627,9 +1749,9 @@ class MainActivity : ComponentActivity() {
                 }
             },
             onRejected = {
-                nutritionScanCoordinator.fail(scanId, "analysis_failed")?.also { failed ->
+                nutritionScanCoordinator.fail(scanId, it.code)?.also { failed ->
                     persistNutritionSession(failed)
-                    dispatchNutritionScanState(failed, it)
+                    dispatchNutritionScanState(failed, it.userMessage)
                 }
             }
         )
@@ -1660,6 +1782,9 @@ class MainActivity : ComponentActivity() {
         if (consented) {
             aiConsentCoordinator.grant()
             dispatchWebEvent("vitalis-ai-consent", JSONObject().put("consented", true))
+            nutritionScanCoordinator.active()?.takeIf {
+                normalizedNutritionImages.containsKey(it.scanId)
+            }?.let(::dispatchNutritionReadiness)
         } else revokeAiConsent("consent_revoked")
     }
 
@@ -2023,7 +2148,35 @@ class MainActivity : ComponentActivity() {
     ) {
         dispatchWebEvent(
             "vitalis-nutrition-scan-state",
-            nutritionScanSessionJson(session).apply { put("message", message ?: JSONObject.NULL) }
+            nutritionScanSessionJson(session).apply {
+                put("message", message ?: JSONObject.NULL)
+                putNutritionReadiness(session)
+            }
+        )
+    }
+
+    private fun dispatchNutritionReadiness(session: NutritionScanSession) {
+        dispatchWebEvent(
+            "vitalis-nutrition-analysis-readiness",
+            nutritionScanSessionJson(session).apply { putNutritionReadiness(session) }
+        )
+    }
+
+    private fun JSONObject.putNutritionReadiness(session: NutritionScanSession) {
+        val configured = isRun4Fixture() || secureSecretStore.status(AiKeyKind.HEALTH).configured
+        val consented = hasAiHealthConsentInternal()
+        val hasPhoto = normalizedNutritionImages.containsKey(session.scanId)
+        put("aiConfigured", configured)
+        put("consented", consented)
+        put(
+            "uiState",
+            NutritionUiStateResolver.resolve(
+                hasPhoto,
+                configured,
+                consented,
+                session.analysisStatus,
+                session.errorCode
+            ).name
         )
     }
 
@@ -3167,6 +3320,8 @@ class MainActivity : ComponentActivity() {
             "health_connect_permission_requested_v1"
         private const val HEALTH_PERMISSION_EVER_AUTHORIZED_KEY =
             "health_connect_ever_authorized_v1"
+        private const val MICROPHONE_PERMISSION_REQUESTED_KEY =
+            "microphone_permission_requested_v1"
         private const val HEALTH_CONNECT_PACKAGE = "com.google.android.apps.healthdata"
         private const val LOCAL_ASSET_HOST = "appassets.androidplatform.net"
         private const val LOCAL_URL = "https://$LOCAL_ASSET_HOST/assets/vitalis/index.html"

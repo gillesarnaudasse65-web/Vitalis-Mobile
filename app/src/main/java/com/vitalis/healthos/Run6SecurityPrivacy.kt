@@ -55,6 +55,7 @@ object OriginBridgePolicy {
         BridgeMethod("openOfflineMode", BridgeCapability.NAVIGATION, true),
         BridgeMethod("openClassicInterface", BridgeCapability.NAVIGATION, true),
         BridgeMethod("openHealthConnectSettings", BridgeCapability.NAVIGATION, true),
+        BridgeMethod("openAppSettings", BridgeCapability.NAVIGATION, true),
         BridgeMethod("openExternalUrl", BridgeCapability.NAVIGATION, true),
         BridgeMethod("sendDeveloperRequestToChatGpt", BridgeCapability.NAVIGATION, true),
         BridgeMethod("openPrivacyDataSettings", BridgeCapability.PRIVACY, true),

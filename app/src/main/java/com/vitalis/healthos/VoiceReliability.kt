@@ -7,6 +7,7 @@ internal enum class RecognitionState {
     REQUESTING_PERMISSION,
     READY,
     LISTENING,
+    FALLBACK,
     PROCESSING_FINAL,
     STOPPING,
     CANCELLED,
@@ -26,13 +27,39 @@ internal enum class VoiceResultKind { PARTIAL, FINAL }
 
 internal enum class RecognitionErrorCategory {
     RECOVERABLE,
+    NETWORK,
+    MICROPHONE_BUSY,
     PERMISSION,
     NO_SPEECH,
     SERVICE_UNAVAILABLE,
+    START_FAILURE,
     FATAL
 }
 
-internal enum class RecognitionErrorAction { RETRY, RETURN_TO_IDLE, END_SESSION }
+internal enum class RecognitionErrorAction { RETRY, LAUNCH_FALLBACK, RETURN_TO_IDLE, END_SESSION }
+
+internal data class VoiceUserStatus(
+    val label: String,
+    val action: String? = null
+)
+
+internal object VoiceUserStatusCatalog {
+    fun forStatus(status: String) = when (status) {
+        "requesting_permission" -> VoiceUserStatus("Permission required")
+        "starting" -> VoiceUserStatus("Starting microphone")
+        "ready", "idle" -> VoiceUserStatus("Ready")
+        "listening" -> VoiceUserStatus("Listening")
+        "processing_final" -> VoiceUserStatus("Processing")
+        "no_speech" -> VoiceUserStatus("No speech detected")
+        "unavailable" -> VoiceUserStatus("Recognition service unavailable")
+        "network_error" -> VoiceUserStatus("Network recognition error")
+        "microphone_busy" -> VoiceUserStatus("Microphone busy")
+        "permission_denied" -> VoiceUserStatus("Permission denied")
+        "permission_permanently_denied" -> VoiceUserStatus("Permission denied", "open_app_settings")
+        "fallback_starting" -> VoiceUserStatus("Listening")
+        else -> VoiceUserStatus("Recognition failed")
+    }
+}
 
 internal data class RecognitionSessionSnapshot(
     val sessionId: String?,
@@ -91,6 +118,10 @@ internal class RecognitionSessionCoordinator(
         state = RecognitionState.LISTENING
     }
 
+    fun markFallback(expectedSessionId: String): Boolean = updateIfCurrent(expectedSessionId) {
+        state = RecognitionState.FALLBACK
+    }
+
     fun markProcessing(expectedSessionId: String): Boolean = updateIfCurrent(expectedSessionId) {
         state = RecognitionState.PROCESSING_FINAL
     }
@@ -104,6 +135,7 @@ internal class RecognitionSessionCoordinator(
         if (state !in setOf(
                 RecognitionState.READY,
                 RecognitionState.LISTENING,
+                RecognitionState.FALLBACK,
                 RecognitionState.PROCESSING_FINAL
             )) return false
         finalResultConsumed = true
@@ -115,16 +147,23 @@ internal class RecognitionSessionCoordinator(
         if (!isCurrent(expectedSessionId) || finalResultConsumed) return RecognitionErrorAction.END_SESSION
         return when (category) {
             RecognitionErrorCategory.RECOVERABLE,
-            RecognitionErrorCategory.SERVICE_UNAVAILABLE -> {
+            RecognitionErrorCategory.NETWORK,
+            RecognitionErrorCategory.MICROPHONE_BUSY -> {
                 if (retryCount < MAX_TRANSIENT_RETRIES) {
                     retryCount += 1
                     state = RecognitionState.READY
                     RecognitionErrorAction.RETRY
                 } else {
-                    state = RecognitionState.ERROR
-                    stopReason = "retry_exhausted"
-                    RecognitionErrorAction.END_SESSION
+                    state = RecognitionState.FALLBACK
+                    stopReason = "fallback_after_retry"
+                    RecognitionErrorAction.LAUNCH_FALLBACK
                 }
+            }
+            RecognitionErrorCategory.SERVICE_UNAVAILABLE,
+            RecognitionErrorCategory.START_FAILURE -> {
+                state = RecognitionState.FALLBACK
+                stopReason = "recognizer_fallback"
+                RecognitionErrorAction.LAUNCH_FALLBACK
             }
             RecognitionErrorCategory.NO_SPEECH -> {
                 state = RecognitionState.IDLE
