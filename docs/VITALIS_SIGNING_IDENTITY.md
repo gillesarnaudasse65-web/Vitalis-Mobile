@@ -18,83 +18,102 @@ Android Debug and earlier CI test certificates are not production identities. Ev
 | Certificate SHA-256 | PENDING |
 | Signing lineage status | PENDING SECURE INITIALIZATION |
 
-Only public certificate metadata belongs in this document. Never add a keystore, password, Base64 keystore value, private key, privileged token, or vault recovery data.
+Only public certificate metadata belongs in this document. Never add a keystore, password, unencrypted Base64 keystore, private key, recovery passphrase, privileged token, or vault credential.
 
-## GitHub-only initialization design
+## Phone-only two-phase initialization
 
-The manual workflow `.github/workflows/initialize-production-signing.yml` uses the protected environment `production-signing-init` and requires:
+### Phase A — generate, encrypt, self-test and transfer
 
-- explicit `confirm_first_identity = true` confirmation;
-- fixed alias `vitalis-production`;
-- protected secrets `VITALIS_INIT_KEYSTORE_PASSWORD` and `VITALIS_INIT_KEY_PASSWORD`;
-- a pending public identity marker, preventing accidental replacement after initialization.
+The manual workflow `.github/workflows/initialize-production-signing.yml`:
 
-Workflow inputs contain public certificate fields only. Passwords are never accepted as workflow inputs.
+- is triggered only by `workflow_dispatch`;
+- uses the protected `production-signing-init` environment;
+- requires `confirm_first_identity = true`;
+- accepts only safe public certificate fields as inputs;
+- generates random keystore and key passwords inside the runner;
+- creates the JKS only under `$RUNNER_TEMP`;
+- encrypts the complete recovery package as a standard passphrase-protected age file;
+- deletes the first plaintext package before decrypting into a new directory;
+- proves that the restored keystore, alias, key password and certificate work;
+- stores only the encrypted package and safe public metadata in the dedicated private vault repository;
+- exposes only the encrypted package as a seven-day phone transfer artifact;
+- removes all temporary signing material with `if: always()`.
 
-### Selected secure transfer mode: Mode C
+Required environment secrets:
 
-No dedicated GitHub secret-management token or configured external vault integration is currently verified. The default workflow token cannot be treated as a generic secret-writing channel.
+- `VITALIS_SIGNING_BACKUP_PASSPHRASE`
+- `VITALIS_SIGNING_VAULT_TOKEN`
 
-The initialization workflow therefore stops before key creation with:
+Passwords are never workflow inputs and are never printed.
 
-`INITIALIZATION BLOCKED — SECURE SECRET TRANSFER CHANNEL REQUIRED`
+### Phase B — independent backup confirmation
 
-It does not generate or upload a permanent keystore. This prevents the only recoverable copy from becoming an ordinary Actions artifact or disappearing with an ephemeral runner.
+The workflow `.github/workflows/confirm-production-signing-backup.yml` generates no key. It requires four non-secret booleans and re-tests the durable encrypted vault copy. Production activation is allowed only after:
 
-Mode A may be implemented later only if a deliberately authorized token can write environment secrets and its minimum permissions are reviewed. Mode B may be implemented only after an actual recoverable vault integration exists. Neither capability is currently claimed.
+- Backup A exists in secure Android phone storage;
+- Backup B exists in an independent user-controlled location outside GitHub;
+- the recovery passphrase is stored in the phone password manager;
+- the encrypted private-vault copy decrypts and signs successfully.
 
-## Protected environments
+Current backup status: **BACKUP_BLOCKED — PHASE A NOT RUN**.
 
-From GitHub Web, create or review:
+## Encryption and phone recovery
 
-1. `production-signing-init`, used only by the one-time initialization preflight;
-2. `production`, used by the existing production APK/AAB build.
+The recovery file is named `Vitalis-Production-Signing-Recovery.tar.gz.age`. It uses the age passphrase format with scrypt derivation and authenticated ChaCha20-Poly1305 encryption. An Android graphical age implementation such as AgePony can decrypt the standard file without a terminal.
 
-Where the repository plan supports them, configure required reviewers and restrict deployment branches to `agent/vitalis-3.15-rc-validation` during RC validation. Protection is recommended but is **NOT VERIFIED** until reviewed in GitHub Settings.
+The encrypted package contains:
 
-Initialization environment secret names:
+- `vitalis-production.jks`;
+- `signing-secrets.json` with the generated passwords and fixed alias;
+- `certificate.txt` with safe public metadata;
+- `README-RECOVERY.txt`.
 
-- `VITALIS_INIT_KEYSTORE_PASSWORD`
-- `VITALIS_INIT_KEY_PASSWORD`
+The unencrypted directory exists only in runner temporary storage. It is never uploaded.
 
-Production environment secret names remain:
+See `VITALIS_PHONE_SIGNING_RECOVERY_GUIDE.md` for the complete no-shell procedure.
 
-- `VITALIS_KEYSTORE_BASE64`
-- `VITALIS_KEYSTORE_PASSWORD`
-- `VITALIS_KEY_ALIAS`
-- `VITALIS_KEY_PASSWORD`
+## Dedicated private signing vault
 
-Never place their values in workflow inputs, logs, summaries, documentation, issues, PR comments, or commit history.
+Durable encrypted storage is the private repository:
 
-## Recovery gate
+`gillesarnaudasse65-web/Vitalis-Signing-Vault`
 
-GitHub Secrets are not a user-downloadable backup vault. A production signing identity is not recoverable merely because its Base64 value exists as a GitHub secret.
+It may contain only:
 
-Allowed status values:
+- `Vitalis-Production-Signing-Recovery.tar.gz.age`;
+- `certificate-public-metadata.txt`;
+- public recovery instructions.
 
-- `BACKUP_CONFIRMED`: at least one independent, recoverable, access-controlled backup has been verified;
-- `BACKUP_NOT_CONFIRMED`: secret storage may exist, but recovery has not been demonstrated;
-- `BACKUP_BLOCKED`: no approved recovery mechanism exists.
+It must never contain a plaintext JKS, plaintext password, unencrypted Base64 keystore, private key, recovery passphrase, or privileged token. The current public repository must never store the encrypted signing package.
 
-Current backup status: **BACKUP_BLOCKED**.
+The private vault is one durable copy, but it does not replace Backup A or Backup B.
 
-The release blocker remains open until a recoverable backup exists independently of the ephemeral runner and GitHub secret value.
+## Production activation marker
 
-## Public metadata publication after secure initialization
+After Phase B succeeds and the public metadata is reviewed, this document must be updated to:
 
-Only after a secure Mode A or Mode B implementation succeeds:
+`Status: **ACTIVE — BACKUP_CONFIRMED**`
 
-1. replace the pending public values in this document with the alias, subject, SHA-256 fingerprint, algorithm, validity, initialization date, and lineage status;
-2. publish only `Vitalis-production-signing-public-metadata`, containing `signing-public-metadata.txt` and the statement `PRIVATE KEY NOT INCLUDED`;
-3. verify the production APK certificate matches this document;
-4. add the permanent warning: **DO NOT REPLACE THIS CERTIFICATE FOR FUTURE UPDATES.**
+The pending fields must be replaced with the actual safe public certificate values. The permanent warning must remain:
 
-No `.jks`, `.keystore`, Base64 keystore, password file, or private key may be uploaded as a normal artifact.
+**DO NOT REPLACE THIS CERTIFICATE FOR FUTURE APK/AAB UPDATES.**
+
+The initialization workflow refuses replacement once the pending marker is gone and returns:
+
+`PRODUCTION SIGNING ALREADY INITIALIZED`
 
 ## Production build and upgrade continuity
 
-After the identity, production secrets, and recovery gate are established, manually run `Vitalis Android quality gates` on `agent/vitalis-3.15-rc-validation` with `build_production = true`.
+The protected `production` job restores the encrypted package directly from the private vault using:
 
-The production job must publish `Vitalis-3.15.0-rc1-production-signed`, and its certificate SHA-256 must match this document. It must not be `CN=Android Debug`.
+- `VITALIS_SIGNING_BACKUP_PASSPHRASE`;
+- `VITALIS_SIGNING_VAULT_TOKEN`.
 
-Only then may a controlled versionCode 20 baseline be built from the verified pre-RC source with the same certificate. The phone upgrade must install versionCode 21 over versionCode 20 without uninstalling. The no-shell procedure is recorded in `VITALIS_PHYSICAL_ACCEPTANCE_CHECKLIST.md`.
+It fails unless this document contains the active backup-confirmed marker and the restored certificate fingerprint matches this document. It has no Android Debug fallback.
+
+The same manual build can produce:
+
+- `Vitalis-3.15.0-rc1-production-signed` with the APK, AAB, R8 mapping, signature report and hashes;
+- `Vitalis-upgrade-test-baseline-v20-production-signed`, built from verified source `188a31e2ff34ef102cdcfa861f8de69972bee88e` with the same certificate.
+
+The phone upgrade must install versionCode 21 over versionCode 20 without uninstalling or clearing data.

@@ -84,3 +84,9 @@ Previous RC decision: **RC FAIL**.
 New decision: **RC FAIL**.
 
 The owner confirmed this will be Vitalis's first production signing lineage and that a physical Android device is available. CI now separates QA test signing from a protected, manual, fail-closed production-signing job. The decision has not changed because the permanent key has not yet been created through a recoverable secret-storage route, backup is not confirmed, physical acceptance has not been executed, and the same-certificate versionCode 20 → 21 upgrade remains untested. See `VITALIS_RC_BLOCKER_CLEARANCE.md`.
+
+## Phone-only signing architecture continuation — 2026-09-28
+
+The release infrastructure now defines an executable two-phase phone-only path based on a standard encrypted age recovery package, a dedicated private GitHub signing-vault repository, an Android Backup A, an independent Backup B, and a separate confirmation workflow. Production and baseline jobs restore the same package and compare its certificate fingerprint with `VITALIS_SIGNING_IDENTITY.md` before building.
+
+This is infrastructure readiness only. No permanent identity, backup confirmation, production APK/AAB, production-signed baseline, physical upgrade, or physical acceptance result exists until the protected workflows and phone steps actually succeed. The decision therefore remains **RC FAIL**.

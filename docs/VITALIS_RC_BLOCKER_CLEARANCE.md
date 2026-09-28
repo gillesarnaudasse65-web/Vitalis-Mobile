@@ -88,3 +88,27 @@ The owner requires a GitHub Web-only path with no local shell, keytool, ADB, or 
 No private keystore is created or uploaded. GitHub Secrets alone are not treated as a recoverable backup. Current recovery status: **BACKUP_BLOCKED**.
 
 The GitHub Web and phone-only upgrade procedure is recorded in `VITALIS_PHYSICAL_ACCEPTANCE_CHECKLIST.md`. The versionCode 20 production-signed baseline job must not be added or executed until a secure production identity and independent recovery path exist.
+
+## Phone-only encrypted-vault continuation — 2026-09-28
+
+The previous Mode C state above remains part of the audit trail. A technically valid phone-only recovery route is now prepared but has **not yet been executed**:
+
+- standard authenticated age encryption using scrypt and ChaCha20-Poly1305;
+- Android graphical recovery through an age-compatible application;
+- first-lineage generation only in GitHub runner temporary storage;
+- clean-directory decryption and signing self-test before any encrypted transfer;
+- durable encrypted copy in the dedicated private `Vitalis-Signing-Vault` repository;
+- seven-day encrypted transfer artifact for Android Backup A;
+- independent user-controlled Backup B outside GitHub;
+- separate non-secret backup-confirmation workflow;
+- protected production restore using the encrypted vault copy, not four manually copied generated passwords;
+- same-certificate versionCode 20 baseline job from `188a31e2ff34ef102cdcfa861f8de69972bee88e`.
+
+No private repository, secret, key, backup or production artifact is claimed merely because the workflows exist. Until Phase A and Phase B actually pass, the truthful states remain:
+
+- Signing: **BLOCKED**
+- Backup: **BACKUP_BLOCKED**
+- Production APK/AAB: **NOT GENERATED**
+- Production-signed upgrade: **NOT TESTED**
+- Physical acceptance: **NOT TESTED**
+- RC: **FAIL**

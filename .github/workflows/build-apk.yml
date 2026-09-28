@@ -8,6 +8,11 @@ on:
         required: true
         default: false
         type: boolean
+      build_upgrade_baseline:
+        description: Also build the controlled versionCode 20 upgrade-test baseline with the same production certificate
+        required: true
+        default: false
+        type: boolean
   pull_request:
     branches:
       - main
@@ -35,6 +40,11 @@ jobs:
           java-version: '17'
       - name: Set up Android SDK
         uses: android-actions/setup-android@v4
+      - name: Set up Go 1.25 for signing recovery helper validation
+        uses: actions/setup-go@v6
+        with:
+          go-version: '1.25.0'
+          cache-dependency-path: scripts/vitalis-age/go.mod
       - name: Set up Gradle cache
         uses: gradle/actions/setup-gradle@v4
       - name: Show build environment
@@ -43,6 +53,9 @@ jobs:
         run: ./gradlew --no-daemon tasks
       - name: JavaScript source contract tests
         run: node --test --test-reporter=spec --test-reporter-destination=stdout --test-reporter=junit --test-reporter-destination=vitalis-js.xml scripts/test-*.cjs
+      - name: Compile standard age signing recovery helper
+        working-directory: scripts/vitalis-age
+        run: go test ./...
       - name: Clean
         run: ./gradlew --no-daemon clean
       - name: Health Connect JVM tests (isolated)
@@ -156,7 +169,10 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     environment: production
-    timeout-minutes: 35
+    timeout-minutes: 45
+    env:
+      VITALIS_VAULT_REPOSITORY: gillesarnaudasse65-web/Vitalis-Signing-Vault
+      VITALIS_VAULT_RECOVERY_PATH: Vitalis-Production-Signing-Recovery.tar.gz.age
     steps:
       - uses: actions/checkout@v4
       - name: Verify Gradle wrapper
@@ -168,29 +184,29 @@ jobs:
           java-version: '17'
       - name: Set up Android SDK
         uses: android-actions/setup-android@v4
+      - name: Set up Go 1.25
+        uses: actions/setup-go@v6
+        with:
+          go-version: '1.25.0'
+          cache-dependency-path: scripts/vitalis-age/go.mod
       - name: Set up Gradle cache
         uses: gradle/actions/setup-gradle@v4
-      - name: Require protected production signing material
+      - name: Restore active production signing identity from private encrypted vault
         env:
-          VITALIS_KEYSTORE_BASE64: ${{ secrets.VITALIS_KEYSTORE_BASE64 }}
-          VITALIS_KEYSTORE_PASSWORD: ${{ secrets.VITALIS_KEYSTORE_PASSWORD }}
-          VITALIS_KEY_ALIAS: ${{ secrets.VITALIS_KEY_ALIAS }}
-          VITALIS_KEY_PASSWORD: ${{ secrets.VITALIS_KEY_PASSWORD }}
+          VITALIS_SIGNING_BACKUP_PASSPHRASE: ${{ secrets.VITALIS_SIGNING_BACKUP_PASSPHRASE }}
+          VITALIS_SIGNING_VAULT_TOKEN: ${{ secrets.VITALIS_SIGNING_VAULT_TOKEN }}
+        run: scripts/restore-vitalis-signing.sh "$RUNNER_TEMP/vitalis-signing"
+      - name: Assemble production-signed RC APK and AAB
         run: |
           set -euo pipefail
-          test -n "$VITALIS_KEYSTORE_BASE64"
-          test -n "$VITALIS_KEYSTORE_PASSWORD"
-          test -n "$VITALIS_KEY_ALIAS"
-          test -n "$VITALIS_KEY_PASSWORD"
-          printf '%s' "$VITALIS_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/vitalis-production.jks"
-          chmod 600 "$RUNNER_TEMP/vitalis-production.jks"
-      - name: Assemble production-signed RC APK and AAB
-        env:
-          VITALIS_KEYSTORE_PATH: ${{ runner.temp }}/vitalis-production.jks
-          VITALIS_KEYSTORE_PASSWORD: ${{ secrets.VITALIS_KEYSTORE_PASSWORD }}
-          VITALIS_KEY_ALIAS: ${{ secrets.VITALIS_KEY_ALIAS }}
-          VITALIS_KEY_PASSWORD: ${{ secrets.VITALIS_KEY_PASSWORD }}
-        run: ./gradlew --no-daemon assembleRelease bundleRelease
+          STORE_PASSWORD=$(jq -er '.keystore_password' "$RUNNER_TEMP/vitalis-signing/signing-secrets.json")
+          ALIAS=$(jq -er '.alias' "$RUNNER_TEMP/vitalis-signing/signing-secrets.json")
+          KEY_PASSWORD=$(jq -er '.key_password' "$RUNNER_TEMP/vitalis-signing/signing-secrets.json")
+          VITALIS_KEYSTORE_PATH="$RUNNER_TEMP/vitalis-signing/vitalis-production.jks" \
+          VITALIS_KEYSTORE_PASSWORD="$STORE_PASSWORD" \
+          VITALIS_KEY_ALIAS="$ALIAS" \
+          VITALIS_KEY_PASSWORD="$KEY_PASSWORD" \
+            ./gradlew --no-daemon assembleRelease bundleRelease
       - name: Verify production signatures and checksums
         run: |
           set -euo pipefail
@@ -199,29 +215,156 @@ jobs:
           test -x "$APKSIGNER_PATH"
           "$APKSIGNER_PATH" verify --verbose --print-certs app/build/outputs/apk/release/app-release.apk \
             > app/build/distributions/vitalis-production-signature.txt
+          ! grep -Fq 'CN=Android Debug' app/build/distributions/vitalis-production-signature.txt
           jarsigner -verify -verbose -certs app/build/outputs/bundle/release/app-release.aab \
             >> app/build/distributions/vitalis-production-signature.txt
+
+          EXPECTED_SHA256=$(awk -F'|' '$2 ~ /Certificate SHA-256/ {gsub(/[ `]/, "", $3); print $3}' \
+            docs/VITALIS_SIGNING_IDENTITY.md | tr -d ':' | tr '[:upper:]' '[:lower:]')
+          APK_SHA256=$(grep -F 'Signer #1 certificate SHA-256 digest:' \
+            app/build/distributions/vitalis-production-signature.txt | head -n 1 | awk '{print $NF}' \
+            | tr -d ':' | tr '[:upper:]' '[:lower:]')
+          test "$APK_SHA256" = "$EXPECTED_SHA256"
+
+          unzip -p app/build/outputs/bundle/release/app-release.aab 'META-INF/*.RSA' \
+            > "$RUNNER_TEMP/vitalis-aab-signature.p7b"
+          openssl pkcs7 -inform DER -in "$RUNNER_TEMP/vitalis-aab-signature.p7b" \
+            -print_certs -out "$RUNNER_TEMP/vitalis-aab-cert.pem"
+          AAB_SHA256=$(openssl x509 -in "$RUNNER_TEMP/vitalis-aab-cert.pem" \
+            -noout -fingerprint -sha256 | cut -d= -f2 | tr -d ':' | tr '[:upper:]' '[:lower:]')
+          test "$AAB_SHA256" = "$EXPECTED_SHA256"
+
+          cp app/build/outputs/apk/release/app-release.apk \
+            app/build/distributions/Vitalis-3.15.0-rc1-production.apk
+          cp app/build/outputs/bundle/release/app-release.aab \
+            app/build/distributions/Vitalis-3.15.0-rc1-production.aab
           sha256sum \
-            app/build/outputs/apk/release/app-release.apk \
-            app/build/outputs/bundle/release/app-release.aab \
+            app/build/distributions/Vitalis-3.15.0-rc1-production.apk \
+            app/build/distributions/Vitalis-3.15.0-rc1-production.aab \
             app/build/outputs/mapping/release/mapping.txt \
             > app/build/distributions/vitalis-production-sha256.txt
+          stat --printf='%n %s bytes\n' \
+            app/build/distributions/Vitalis-3.15.0-rc1-production.apk \
+            app/build/distributions/Vitalis-3.15.0-rc1-production.aab \
+            app/build/outputs/mapping/release/mapping.txt \
+            > app/build/distributions/vitalis-production-sizes.txt
       - name: Remove temporary production keystore
         if: always()
-        run: rm -f "$RUNNER_TEMP/vitalis-production.jks"
+        run: rm -rf "$RUNNER_TEMP/vitalis-signing"
       - name: Upload production candidate artifacts
         uses: actions/upload-artifact@v4
         with:
           name: Vitalis-3.15.0-rc1-production-signed
           path: |
-            app/build/outputs/apk/release/app-release.apk
-            app/build/outputs/bundle/release/app-release.aab
+            app/build/distributions/Vitalis-3.15.0-rc1-production.apk
+            app/build/distributions/Vitalis-3.15.0-rc1-production.aab
             app/build/outputs/mapping/release/mapping.txt
             app/build/distributions/vitalis-production-signature.txt
             app/build/distributions/vitalis-production-sha256.txt
+            app/build/distributions/vitalis-production-sizes.txt
             docs/RELEASE_NOTES_3_15_0_RC1.md
           if-no-files-found: error
           retention-days: 90
+
+  production_upgrade_baseline:
+    name: Production-signed versionCode 20 upgrade baseline
+    if: >-
+      github.event_name == 'workflow_dispatch' &&
+      inputs.build_production == true &&
+      inputs.build_upgrade_baseline == true
+    needs: build
+    runs-on: ubuntu-latest
+    environment: production
+    timeout-minutes: 45
+    env:
+      VITALIS_VAULT_REPOSITORY: gillesarnaudasse65-web/Vitalis-Signing-Vault
+      VITALIS_VAULT_RECOVERY_PATH: Vitalis-Production-Signing-Recovery.tar.gz.age
+    steps:
+      - name: Check out RC signing infrastructure
+        uses: actions/checkout@v4
+      - name: Check out verified versionCode 20 source
+        uses: actions/checkout@v4
+        with:
+          ref: 188a31e2ff34ef102cdcfa861f8de69972bee88e
+          path: baseline-source
+      - name: Verify controlled baseline identity
+        run: |
+          grep -Fq 'applicationId = "com.vitalis.healthos"' baseline-source/app/build.gradle.kts
+          grep -Fq 'versionCode = 20' baseline-source/app/build.gradle.kts
+          grep -Fq 'versionName = "3.15.0-security-release"' baseline-source/app/build.gradle.kts
+      - name: Verify Gradle wrapper
+        uses: gradle/actions/wrapper-validation@v4
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v4
+      - name: Set up Go 1.25
+        uses: actions/setup-go@v6
+        with:
+          go-version: '1.25.0'
+          cache-dependency-path: scripts/vitalis-age/go.mod
+      - name: Set up Gradle cache
+        uses: gradle/actions/setup-gradle@v4
+      - name: Restore active production signing identity from private encrypted vault
+        env:
+          VITALIS_SIGNING_BACKUP_PASSPHRASE: ${{ secrets.VITALIS_SIGNING_BACKUP_PASSPHRASE }}
+          VITALIS_SIGNING_VAULT_TOKEN: ${{ secrets.VITALIS_SIGNING_VAULT_TOKEN }}
+        run: scripts/restore-vitalis-signing.sh "$RUNNER_TEMP/vitalis-signing"
+      - name: Build controlled production-signed versionCode 20 baseline
+        working-directory: baseline-source
+        run: |
+          set -euo pipefail
+          STORE_PASSWORD=$(jq -er '.keystore_password' "$RUNNER_TEMP/vitalis-signing/signing-secrets.json")
+          ALIAS=$(jq -er '.alias' "$RUNNER_TEMP/vitalis-signing/signing-secrets.json")
+          KEY_PASSWORD=$(jq -er '.key_password' "$RUNNER_TEMP/vitalis-signing/signing-secrets.json")
+          VITALIS_KEYSTORE_PATH="$RUNNER_TEMP/vitalis-signing/vitalis-production.jks" \
+          VITALIS_KEYSTORE_PASSWORD="$STORE_PASSWORD" \
+          VITALIS_KEY_ALIAS="$ALIAS" \
+          VITALIS_KEY_PASSWORD="$KEY_PASSWORD" \
+            ./gradlew --no-daemon assembleRelease
+      - name: Verify and package versionCode 20 baseline
+        run: |
+          set -euo pipefail
+          mkdir -p baseline-source/app/build/distributions
+          APKSIGNER_PATH="$(find "$ANDROID_HOME/build-tools" -type f -name apksigner -print | sort -V | tail -n 1)"
+          "$APKSIGNER_PATH" verify --verbose --print-certs \
+            baseline-source/app/build/outputs/apk/release/app-release.apk \
+            > baseline-source/app/build/distributions/vitalis-v20-signature.txt
+          ! grep -Fq 'CN=Android Debug' baseline-source/app/build/distributions/vitalis-v20-signature.txt
+          EXPECTED_SHA256=$(awk -F'|' '$2 ~ /Certificate SHA-256/ {gsub(/[ `]/, "", $3); print $3}' \
+            docs/VITALIS_SIGNING_IDENTITY.md | tr -d ':' | tr '[:upper:]' '[:lower:]')
+          BASELINE_SHA256=$(grep -F 'Signer #1 certificate SHA-256 digest:' \
+            baseline-source/app/build/distributions/vitalis-v20-signature.txt | awk '{print $NF}' \
+            | tr -d ':' | tr '[:upper:]' '[:lower:]')
+          test "$BASELINE_SHA256" = "$EXPECTED_SHA256"
+          cp baseline-source/app/build/outputs/apk/release/app-release.apk \
+            baseline-source/app/build/distributions/Vitalis-upgrade-test-baseline-v20-production.apk
+          sha256sum baseline-source/app/build/distributions/Vitalis-upgrade-test-baseline-v20-production.apk \
+            > baseline-source/app/build/distributions/vitalis-v20-sha256.txt
+          {
+            echo "UPGRADE TEST BASELINE NOT CURRENT DISTRIBUTION BUILD"
+            echo "Application ID: com.vitalis.healthos"
+            echo "Version code: 20"
+            echo "Source: 188a31e2ff34ef102cdcfa861f8de69972bee88e"
+            echo "Purpose: phone-only same-certificate upgrade validation to versionCode 21"
+          } > baseline-source/app/build/distributions/BASELINE-WARNING.txt
+      - name: Remove temporary production keystore
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/vitalis-signing"
+      - name: Upload controlled upgrade baseline
+        uses: actions/upload-artifact@v4
+        with:
+          name: Vitalis-upgrade-test-baseline-v20-production-signed
+          path: |
+            baseline-source/app/build/distributions/Vitalis-upgrade-test-baseline-v20-production.apk
+            baseline-source/app/build/distributions/vitalis-v20-signature.txt
+            baseline-source/app/build/distributions/vitalis-v20-sha256.txt
+            baseline-source/app/build/distributions/BASELINE-WARNING.txt
+          if-no-files-found: error
+          retention-days: 30
 
   emulator:
     name: Emulator smoke

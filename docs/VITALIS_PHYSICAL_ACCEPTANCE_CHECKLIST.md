@@ -19,7 +19,7 @@ If any prerequisite is missing, stop and report `NOT TESTED`.
 1. In GitHub Web, open the successful baseline workflow run and download `Vitalis-upgrade-test-baseline-v20-production-signed`.
 2. Extract the ZIP using the phone's Files application and open the versionCode 20 APK.
 3. Allow installation from that specific browser or file manager if Android asks, then install the baseline.
-4. Open Vitalis and create synthetic test state: choose a date, select a theme, arrange at least two widgets, add a sample meal, record consent/settings choices, and add one sample journal entry.
+4. Open Vitalis and create synthetic test state: choose a historical date, select a coach, choose Ocean or Dark theme and an accent, arrange at least two widgets, apply a dashboard preset, add a sample meal, record a consent choice, and add one sample journal entry.
 5. Close Vitalis normally. Do not uninstall it and do not clear application storage.
 6. In GitHub Web, open the successful production RC workflow run and download `Vitalis-3.15.0-rc1-production-signed`.
 7. Extract the ZIP and open the RC versionCode 21 APK.
@@ -76,6 +76,8 @@ Observation:
 
 Expected: widget details open, configuration works, and the chosen layout persists.
 
+Also verify the hydration quick-add records exactly one synthetic entry and can be undone.
+
 Observation:
 
 ## 5. Drag and drop
@@ -118,7 +120,17 @@ Expected: permission, capture, cancellation, and return to Vitalis work without 
 
 Observation:
 
-## 9. Microphone
+## 9. Photo picker
+
+- [ ] PASS
+- [ ] FAIL
+- [x] NOT TESTED
+
+Expected: an existing phone image can be selected, reviewed or cancelled, and Vitalis resumes safely.
+
+Observation:
+
+## 10. Microphone
 
 - [ ] PASS
 - [ ] FAIL
@@ -128,7 +140,7 @@ Expected: permission and recording controls work, with a clear unavailable/denie
 
 Observation:
 
-## 10. Text-to-speech
+## 11. Text-to-speech
 
 - [ ] PASS
 - [ ] FAIL
@@ -138,7 +150,7 @@ Expected: speech starts and stops correctly and unavailable-engine handling is t
 
 Observation:
 
-## 11. Offline
+## 12. Offline
 
 - [ ] PASS
 - [ ] FAIL
@@ -148,7 +160,7 @@ Expected: supported local functions remain usable offline and reconnect without 
 
 Observation:
 
-## 12. Export and import
+## 13. Export and import
 
 - [ ] PASS
 - [ ] FAIL
@@ -158,7 +170,7 @@ Expected: a sanitized export can be created and restored without duplication or 
 
 Observation:
 
-## 13. Privacy
+## 14. Privacy
 
 - [ ] PASS
 - [ ] FAIL
@@ -168,7 +180,7 @@ Expected: consent, delete, sensitive-screen, and provider disclosures behave as 
 
 Observation:
 
-## 14. API key settings
+## 15. API key settings
 
 - [ ] PASS
 - [ ] FAIL
@@ -178,13 +190,13 @@ Expected: keys are masked, never exposed in screenshots/exports, and can be remo
 
 Observation:
 
-## 15. Restart and persistence
+## 16. Restart and persistence
 
 - [ ] PASS
 - [ ] FAIL
 - [x] NOT TESTED
 
-Expected: selected date, theme, widget layout, sample meal, consent/settings, and journal state survive restart and the 20 → 21 upgrade.
+Expected: selected date, coach, theme, accent, widget layout, preset, sample meal, consent/settings, and journal state survive restart and the 20 → 21 upgrade.
 
 Observation:
 

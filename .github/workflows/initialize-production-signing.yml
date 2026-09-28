@@ -47,11 +47,14 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  secure_transfer_preflight:
-    name: Secure signing initialization preflight
+  initialize:
+    name: Generate, encrypt and self-test first signing identity
     runs-on: ubuntu-latest
     environment: production-signing-init
-    timeout-minutes: 10
+    timeout-minutes: 20
+    env:
+      VITALIS_VAULT_REPOSITORY: gillesarnaudasse65-web/Vitalis-Signing-Vault
+      VITALIS_VAULT_RECOVERY_PATH: Vitalis-Production-Signing-Recovery.tar.gz.age
     steps:
       - uses: actions/checkout@v4
 
@@ -61,11 +64,17 @@ jobs:
           distribution: temurin
           java-version: '17'
 
+      - name: Set up Go 1.25
+        uses: actions/setup-go@v6
+        with:
+          go-version: '1.25.0'
+          cache-dependency-path: scripts/vitalis-age/go.mod
+
       - name: Require explicit first-lineage confirmation
         if: ${{ inputs.confirm_first_identity != true }}
         run: |
           echo "This operation establishes the permanent Android production-signing lineage for com.vitalis.healthos." >&2
-          echo "Set confirm_first_identity to true only after reviewing the recovery requirements." >&2
+          echo "Set confirm_first_identity to true only after reviewing the phone recovery guide." >&2
           exit 1
 
       - name: Prevent accidental re-initialization
@@ -73,40 +82,273 @@ jobs:
           set -euo pipefail
           if ! grep -Fq 'Status: **PENDING SECURE INITIALIZATION**' docs/VITALIS_SIGNING_IDENTITY.md; then
             echo "PRODUCTION SIGNING ALREADY INITIALIZED" >&2
-            echo "The public signing marker is no longer pending. Refusing to generate a replacement identity." >&2
             exit 1
           fi
 
-      - name: Require protected initialization password secrets
+      - name: Require approved public certificate identity
         env:
-          VITALIS_INIT_KEYSTORE_PASSWORD: ${{ secrets.VITALIS_INIT_KEYSTORE_PASSWORD }}
-          VITALIS_INIT_KEY_PASSWORD: ${{ secrets.VITALIS_INIT_KEY_PASSWORD }}
+          CERTIFICATE_COMMON_NAME: ${{ inputs.certificate_common_name }}
+          CERTIFICATE_ORGANIZATION: ${{ inputs.certificate_organization }}
+          CERTIFICATE_ORG_UNIT: ${{ inputs.certificate_org_unit }}
+          CERTIFICATE_CITY: ${{ inputs.certificate_city }}
+          CERTIFICATE_STATE: ${{ inputs.certificate_state }}
+          CERTIFICATE_COUNTRY: ${{ inputs.certificate_country }}
         run: |
           set -euo pipefail
-          if [ -z "$VITALIS_INIT_KEYSTORE_PASSWORD" ] || [ -z "$VITALIS_INIT_KEY_PASSWORD" ]; then
-            echo "Required production-signing initialization secrets are missing." >&2
+          test "$CERTIFICATE_COMMON_NAME" = "Vitalis Health OS"
+          test "$CERTIFICATE_ORGANIZATION" = "Vitalis"
+          test "$CERTIFICATE_ORG_UNIT" = "Mobile"
+          test "$CERTIFICATE_CITY" = "Abidjan"
+          test "$CERTIFICATE_STATE" = "Abidjan"
+          test "$CERTIFICATE_COUNTRY" = "CI"
+
+      - name: Verify protected secrets and private signing vault
+        env:
+          VITALIS_SIGNING_BACKUP_PASSPHRASE: ${{ secrets.VITALIS_SIGNING_BACKUP_PASSPHRASE }}
+          VITALIS_SIGNING_VAULT_TOKEN: ${{ secrets.VITALIS_SIGNING_VAULT_TOKEN }}
+        run: |
+          set -euo pipefail
+          test -n "$VITALIS_SIGNING_BACKUP_PASSPHRASE"
+          test -n "$VITALIS_SIGNING_VAULT_TOKEN"
+
+          VAULT_RESPONSE="$RUNNER_TEMP/vitalis-vault.json"
+          HTTP_STATUS=$(curl --silent --show-error \
+            --output "$VAULT_RESPONSE" --write-out '%{http_code}' \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer $VITALIS_SIGNING_VAULT_TOKEN" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/$VITALIS_VAULT_REPOSITORY")
+          test "$HTTP_STATUS" = "200"
+          test "$(jq -r '.private' "$VAULT_RESPONSE")" = "true"
+          test "$(jq -r '.permissions.push' "$VAULT_RESPONSE")" = "true"
+          jq -er '.default_branch | select(length > 0)' "$VAULT_RESPONSE" > "$RUNNER_TEMP/vault-default-branch"
+
+          FILE_STATUS=$(curl --silent --show-error \
+            --output "$RUNNER_TEMP/vitalis-vault-file.json" --write-out '%{http_code}' \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer $VITALIS_SIGNING_VAULT_TOKEN" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/$VITALIS_VAULT_REPOSITORY/contents/$VITALIS_VAULT_RECOVERY_PATH")
+          if [ "$FILE_STATUS" = "200" ]; then
+            echo "PRODUCTION SIGNING ALREADY INITIALIZED" >&2
             exit 1
           fi
+          test "$FILE_STATUS" = "404"
 
-      - name: Stop before permanent key creation when no secure transfer channel exists
+      - name: Generate first permanent signing identity in runner temp
+        env:
+          CERTIFICATE_COMMON_NAME: ${{ inputs.certificate_common_name }}
+          CERTIFICATE_ORGANIZATION: ${{ inputs.certificate_organization }}
+          CERTIFICATE_ORG_UNIT: ${{ inputs.certificate_org_unit }}
+          CERTIFICATE_CITY: ${{ inputs.certificate_city }}
+          CERTIFICATE_STATE: ${{ inputs.certificate_state }}
+          CERTIFICATE_COUNTRY: ${{ inputs.certificate_country }}
         run: |
           set -euo pipefail
-          {
-            echo "# Vitalis production-signing initialization"
-            echo
-            echo "INITIALIZATION BLOCKED — SECURE SECRET TRANSFER CHANNEL REQUIRED"
-            echo
-            echo "Mode C is active. No permanent keystore was generated."
-            echo "A dedicated secret-writing token or configured external vault must be approved before initialization can proceed."
-            echo "GitHub Secrets alone are not a user-downloadable recovery backup."
-          } >> "$GITHUB_STEP_SUMMARY"
-          echo "INITIALIZATION BLOCKED — SECURE SECRET TRANSFER CHANNEL REQUIRED" >&2
-          exit 1
+          umask 077
+          RECOVERY_DIR="$RUNNER_TEMP/vitalis-signing-recovery"
+          mkdir -p "$RECOVERY_DIR"
 
-      - name: Remove any temporary signing material
+          KEYSTORE_PASSWORD=$(openssl rand -hex 32)
+          KEY_PASSWORD=$(openssl rand -hex 32)
+          SUBJECT="CN=$CERTIFICATE_COMMON_NAME,OU=$CERTIFICATE_ORG_UNIT,O=$CERTIFICATE_ORGANIZATION,L=$CERTIFICATE_CITY,ST=$CERTIFICATE_STATE,C=$CERTIFICATE_COUNTRY"
+
+          keytool -genkeypair \
+            -keystore "$RECOVERY_DIR/vitalis-production.jks" \
+            -storetype JKS \
+            -storepass "$KEYSTORE_PASSWORD" \
+            -keypass "$KEY_PASSWORD" \
+            -alias vitalis-production \
+            -dname "$SUBJECT" \
+            -keyalg RSA \
+            -keysize 4096 \
+            -sigalg SHA256withRSA \
+            -validity 10000 \
+            -noprompt >/dev/null
+
+          keytool -exportcert \
+            -keystore "$RECOVERY_DIR/vitalis-production.jks" \
+            -storepass "$KEYSTORE_PASSWORD" \
+            -alias vitalis-production \
+            -file "$RUNNER_TEMP/vitalis-production-cert.der" >/dev/null
+
+          CERTIFICATE_SHA256=$(openssl x509 -inform DER \
+            -in "$RUNNER_TEMP/vitalis-production-cert.der" \
+            -noout -fingerprint -sha256 | cut -d= -f2)
+          CERTIFICATE_DATES=$(openssl x509 -inform DER \
+            -in "$RUNNER_TEMP/vitalis-production-cert.der" \
+            -noout -dates)
+          CREATED_AT=$(date -u +'%Y-%m-%dT%H:%M:%SZ')
+
+          jq -n \
+            --arg keystore_password "$KEYSTORE_PASSWORD" \
+            --arg alias "vitalis-production" \
+            --arg key_password "$KEY_PASSWORD" \
+            '{keystore_password:$keystore_password,alias:$alias,key_password:$key_password}' \
+            > "$RECOVERY_DIR/signing-secrets.json"
+
+          {
+            echo "FIRST STABLE VITALIS PRODUCTION SIGNING IDENTITY"
+            echo "Application ID: com.vitalis.healthos"
+            echo "Alias: vitalis-production"
+            echo "Subject: $SUBJECT"
+            echo "Algorithm: RSA 4096"
+            echo "Created (UTC): $CREATED_AT"
+            echo "$CERTIFICATE_DATES"
+            echo "Certificate SHA-256: $CERTIFICATE_SHA256"
+            echo "DO NOT REPLACE THIS CERTIFICATE FOR FUTURE APK/AAB UPDATES."
+          } > "$RECOVERY_DIR/certificate.txt"
+
+          cp docs/VITALIS_PHONE_SIGNING_RECOVERY_GUIDE.md "$RECOVERY_DIR/README-RECOVERY.txt"
+          cp "$RECOVERY_DIR/certificate.txt" "$RUNNER_TEMP/certificate-public-metadata.txt"
+          cp docs/VITALIS_PHONE_SIGNING_RECOVERY_GUIDE.md "$RUNNER_TEMP/README-RECOVERY.txt"
+          tar --format=posix -C "$RECOVERY_DIR" -czf "$RUNNER_TEMP/Vitalis-Production-Signing-Recovery.tar.gz" .
+
+      - name: Encrypt recovery package with authenticated age encryption
+        env:
+          VITALIS_SIGNING_BACKUP_PASSPHRASE: ${{ secrets.VITALIS_SIGNING_BACKUP_PASSPHRASE }}
+        run: |
+          set -euo pipefail
+          (cd scripts/vitalis-age && go run . encrypt \
+            "$RUNNER_TEMP/Vitalis-Production-Signing-Recovery.tar.gz" \
+            "$RUNNER_TEMP/Vitalis-Production-Signing-Recovery.tar.gz.age")
+          rm -f "$RUNNER_TEMP/Vitalis-Production-Signing-Recovery.tar.gz"
+          rm -rf "$RUNNER_TEMP/vitalis-signing-recovery"
+
+      - name: Self-test encrypted recovery from a clean extraction
+        env:
+          VITALIS_SIGNING_BACKUP_PASSPHRASE: ${{ secrets.VITALIS_SIGNING_BACKUP_PASSPHRASE }}
+        run: |
+          set -euo pipefail
+          umask 077
+          (cd scripts/vitalis-age && go run . decrypt \
+            "$RUNNER_TEMP/Vitalis-Production-Signing-Recovery.tar.gz.age" \
+            "$RUNNER_TEMP/recovered.tar.gz")
+          mkdir -p "$RUNNER_TEMP/recovery-self-test"
+          tar -xzf "$RUNNER_TEMP/recovered.tar.gz" -C "$RUNNER_TEMP/recovery-self-test"
+
+          RESTORED_STORE_PASSWORD=$(jq -er '.keystore_password' "$RUNNER_TEMP/recovery-self-test/signing-secrets.json")
+          RESTORED_ALIAS=$(jq -er '.alias' "$RUNNER_TEMP/recovery-self-test/signing-secrets.json")
+          RESTORED_KEY_PASSWORD=$(jq -er '.key_password' "$RUNNER_TEMP/recovery-self-test/signing-secrets.json")
+          test "$RESTORED_ALIAS" = "vitalis-production"
+
+          keytool -list \
+            -keystore "$RUNNER_TEMP/recovery-self-test/vitalis-production.jks" \
+            -storepass "$RESTORED_STORE_PASSWORD" \
+            -alias "$RESTORED_ALIAS" >/dev/null
+
+          mkdir -p "$RUNNER_TEMP/signing-proof-content"
+          cp "$RUNNER_TEMP/recovery-self-test/README-RECOVERY.txt" "$RUNNER_TEMP/signing-proof-content/README.txt"
+          jar --create --file "$RUNNER_TEMP/signing-proof.jar" -C "$RUNNER_TEMP/signing-proof-content" .
+          jarsigner \
+            -keystore "$RUNNER_TEMP/recovery-self-test/vitalis-production.jks" \
+            -storepass "$RESTORED_STORE_PASSWORD" \
+            -keypass "$RESTORED_KEY_PASSWORD" \
+            "$RUNNER_TEMP/signing-proof.jar" "$RESTORED_ALIAS" >/dev/null
+          jarsigner -verify "$RUNNER_TEMP/signing-proof.jar" >/dev/null
+
+          keytool -exportcert \
+            -keystore "$RUNNER_TEMP/recovery-self-test/vitalis-production.jks" \
+            -storepass "$RESTORED_STORE_PASSWORD" \
+            -alias "$RESTORED_ALIAS" \
+            -file "$RUNNER_TEMP/recovered-cert.der" >/dev/null
+          RESTORED_SHA256=$(openssl x509 -inform DER -in "$RUNNER_TEMP/recovered-cert.der" \
+            -noout -fingerprint -sha256 | cut -d= -f2)
+          grep -Fq "Certificate SHA-256: $RESTORED_SHA256" "$RUNNER_TEMP/certificate-public-metadata.txt"
+
+      - name: Store encrypted package in private durable vault
+        env:
+          VITALIS_SIGNING_VAULT_TOKEN: ${{ secrets.VITALIS_SIGNING_VAULT_TOKEN }}
+        run: |
+          set -euo pipefail
+          DEFAULT_BRANCH=$(cat "$RUNNER_TEMP/vault-default-branch")
+
+          upsert_public_file() {
+            SOURCE_FILE="$1"
+            DESTINATION_PATH="$2"
+            EXISTING_RESPONSE="$RUNNER_TEMP/existing-$(basename "$DESTINATION_PATH").json"
+            STATUS=$(curl --silent --show-error --output "$EXISTING_RESPONSE" --write-out '%{http_code}' \
+              -H "Accept: application/vnd.github+json" \
+              -H "Authorization: Bearer $VITALIS_SIGNING_VAULT_TOKEN" \
+              -H "X-GitHub-Api-Version: 2022-11-28" \
+              "https://api.github.com/repos/$VITALIS_VAULT_REPOSITORY/contents/$DESTINATION_PATH?ref=$DEFAULT_BRANCH")
+            EXISTING_SHA=""
+            if [ "$STATUS" = "200" ]; then
+              EXISTING_SHA=$(jq -r '.sha' "$EXISTING_RESPONSE")
+            else
+              test "$STATUS" = "404"
+            fi
+            jq -n \
+              --arg message "Update safe Vitalis signing recovery metadata" \
+              --arg content "$(base64 -w0 "$SOURCE_FILE")" \
+              --arg branch "$DEFAULT_BRANCH" \
+              --arg sha "$EXISTING_SHA" \
+              '{message:$message,content:$content,branch:$branch} + (if $sha == "" then {} else {sha:$sha} end)' \
+              > "$RUNNER_TEMP/vault-upload.json"
+            curl --fail-with-body --silent --show-error \
+              -X PUT \
+              -H "Accept: application/vnd.github+json" \
+              -H "Authorization: Bearer $VITALIS_SIGNING_VAULT_TOKEN" \
+              -H "X-GitHub-Api-Version: 2022-11-28" \
+              "https://api.github.com/repos/$VITALIS_VAULT_REPOSITORY/contents/$DESTINATION_PATH" \
+              --data-binary @"$RUNNER_TEMP/vault-upload.json" >/dev/null
+          }
+
+          upsert_public_file "$RUNNER_TEMP/certificate-public-metadata.txt" "certificate-public-metadata.txt"
+          upsert_public_file "$RUNNER_TEMP/README-RECOVERY.txt" "README-RECOVERY.txt"
+
+          jq -n \
+            --arg message "Store first encrypted Vitalis production signing identity" \
+            --arg content "$(base64 -w0 "$RUNNER_TEMP/Vitalis-Production-Signing-Recovery.tar.gz.age")" \
+            --arg branch "$DEFAULT_BRANCH" \
+            '{message:$message,content:$content,branch:$branch}' \
+            > "$RUNNER_TEMP/vault-encrypted-upload.json"
+          curl --fail-with-body --silent --show-error \
+            -X PUT \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer $VITALIS_SIGNING_VAULT_TOKEN" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/$VITALIS_VAULT_REPOSITORY/contents/$VITALIS_VAULT_RECOVERY_PATH" \
+            --data-binary @"$RUNNER_TEMP/vault-encrypted-upload.json" >/dev/null
+
+      - name: Upload encrypted phone transfer package
+        uses: actions/upload-artifact@v4
+        with:
+          name: Vitalis-production-signing-encrypted-recovery
+          path: |
+            ${{ runner.temp }}/Vitalis-Production-Signing-Recovery.tar.gz.age
+            ${{ runner.temp }}/certificate-public-metadata.txt
+            ${{ runner.temp }}/README-RECOVERY.txt
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Publish safe initialization result
+        run: |
+          {
+            echo "# Vitalis production signing — Phase A complete"
+            echo
+            echo "- Encrypted recovery self-test: PASS"
+            echo "- Durable private vault copy: PASS"
+            echo "- Phone transfer artifact: READY (7-day retention)"
+            echo "- Backup confirmation: REQUIRED"
+            echo "- Production activation: BLOCKED until Backup A, Backup B and password-manager storage are confirmed"
+            echo
+            cat "$RUNNER_TEMP/certificate-public-metadata.txt"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Remove all temporary signing material
         if: always()
         run: |
+          rm -rf \
+            "$RUNNER_TEMP/vitalis-signing-recovery" \
+            "$RUNNER_TEMP/recovery-self-test" \
+            "$RUNNER_TEMP/signing-proof-content"
           rm -f \
-            "$RUNNER_TEMP/vitalis-production.jks" \
-            "$RUNNER_TEMP/vitalis-production.jks.base64" \
-            "$RUNNER_TEMP/vitalis-signing-passwords.txt"
+            "$RUNNER_TEMP/Vitalis-Production-Signing-Recovery.tar.gz" \
+            "$RUNNER_TEMP/Vitalis-Production-Signing-Recovery.tar.gz.age" \
+            "$RUNNER_TEMP/recovered.tar.gz" \
+            "$RUNNER_TEMP/signing-proof.jar" \
+            "$RUNNER_TEMP/vitalis-production-cert.der" \
+            "$RUNNER_TEMP/recovered-cert.der" \
+            "$RUNNER_TEMP"/vault-*.json \
+            "$RUNNER_TEMP"/existing-*.json
