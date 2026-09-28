@@ -34,15 +34,23 @@ The phone evidence that opened this hotfix is retained truthfully: the QA RC ins
 
 | Layer | Result |
 |---|---|
-| Source/JavaScript | Pending GitHub Actions evidence |
-| JVM | Pending GitHub Actions evidence |
-| Voice | Pending GitHub Actions evidence |
-| Nutrition | Pending GitHub Actions evidence |
-| Instrumentation | Pending GitHub Actions evidence |
-| Lint | Pending GitHub Actions evidence |
-| QA APK/AAB | Pending GitHub Actions artifact |
+| Source/JavaScript | 65/65 PASS |
+| JVM | 91/91 PASS |
+| Voice | 27/27 JVM PASS; Run 5 instrumentation PASS |
+| Nutrition | 18/18 JVM PASS; Run 4 instrumentation PASS |
+| Instrumentation | 10/10 PASS |
+| Synthetic upgrades | 2/2 PASS |
+| Lint | 0 errors / 54 unchanged warnings |
+| QA APK/AAB | PASS — GitHub Actions run 106 |
 
-Expected QA artifact: `Vitalis-3.15.0-rc1-physical-hotfix-qa`. It is test-signed and **NOT FOR PRODUCTION DISTRIBUTION**.
+GitHub Actions run: `36483529996` (`de3a05b63cd8b29f30dd267cb9ceca8fef8dc2f5`).
+
+QA artifact: `Vitalis-3.15.0-rc1-physical-hotfix-qa`. It is test-signed and **NOT FOR PRODUCTION DISTRIBUTION**.
+
+- APK: `Vitalis-3.15.0-rc1-physical-hotfix-qa.apk`, 981,229 bytes, SHA-256 `23c86bda5f08feea64d362f4e271ad180ead1988fcf5e6d9e0c673342ad8dc3a`.
+- AAB: `Vitalis-3.15.0-rc1-physical-hotfix-qa.aab`, 994,120 bytes, SHA-256 `df85dcb1fbfe30c7d3144beaeda4995b6bec79991deb3de64f0d2a419852857c`.
+- R8 mapping SHA-256: `d777ee652bc3d8244c4eba17eaf4f189bc7edd6957a56a481c4d716c91f51f2f`.
+- Artifact archive digest: `sha256:db233ed82479d642e856ce08ecbd1c15030335fd9cd43a06324323a5674d5082`.
 
 ## Physical retest required
 
@@ -52,6 +60,8 @@ Expected QA artifact: `Vitalis-3.15.0-rc1-physical-hotfix-qa`. It is test-signed
 Retest voice by tapping the coach microphone, observing permission/listening/processing or a precise error, speaking one phrase, and confirming one final text. If the embedded service is unavailable, confirm that the Android fallback opens and returns one final text.
 
 Retest nutrition by capturing a safe sample meal image, confirming the preview, configuring the key if requested in the protected native screen, granting consent if requested, then obtaining either a reviewable estimate or a precise actionable API error. Do not paste the API key into evidence.
+
+Phone-only download: open GitHub Actions run 106, open **Artifacts**, download `Vitalis-3.15.0-rc1-physical-hotfix-qa`, extract it with Android Files, then open the `.apk`. Because this is QA test signing, Android may require uninstalling the earlier differently signed QA APK; this QA reinstall is not the production v20 → v21 upgrade test and must not be reported as upgrade evidence.
 
 ## RC status
 

@@ -81,7 +81,9 @@ Google Play preparation is tracked in `VITALIS_GOOGLE_PLAY_CHECKLIST.md`; no pub
 
 A real-phone QA run installed and launched the RC and successfully returned a camera capture, but voice recognition produced no usable result and the meal photo was not analyzed. Those two observed failures are not overwritten by the earlier automated baseline. A scoped reliability hotfix now adds a session-owned Android recognition fallback, visible/actionable voice states, native-trusted AI-key and consent readiness, same-photo resume, precise API failure classification, and retry without recapture. See `VITALIS_PHYSICAL_HOTFIX_REPORT.md`.
 
-The hotfix requires fresh GitHub Actions evidence and a new phone retest. Until both flows pass on the phone, the physical result and RC decision remain **FAIL**.
+The hotfix required fresh GitHub Actions evidence and still requires a new phone retest. Until both flows pass on the phone, the physical result and RC decision remain **FAIL**.
+
+GitHub Actions run 106 completed successfully at hotfix commit `de3a05b63cd8b29f30dd267cb9ceca8fef8dc2f5`: 65/65 source contracts, 91/91 JVM tests, 10/10 instrumentation tests, 2/2 synthetic upgrade executions, lint with 0 errors and 54 unchanged warnings, and minified QA APK/AAB generation. The phone retest remains mandatory; automated success does not change the RC decision.
 
 ## RC blocker-clearance continuation
 

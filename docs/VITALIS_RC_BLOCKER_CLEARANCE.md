@@ -112,3 +112,9 @@ No private repository, secret, key, backup or production artifact is claimed mer
 - Production-signed upgrade: **NOT TESTED**
 - Physical acceptance: **NOT TESTED**
 - RC: **FAIL**
+
+## Physical voice/nutrition hotfix continuation — 2026-09-28
+
+Phone QA evidence subsequently identified two real-device failures: voice recognition did not return usable text, and a successfully captured meal photo did not proceed to analysis. The scoped hotfix at `de3a05b63cd8b29f30dd267cb9ceca8fef8dc2f5` passed GitHub Actions run 106 with 65 source, 91 JVM, 10 instrumentation, and 2 synthetic-upgrade executions; lint remained at 0 errors / 54 warnings. A minified test-signed artifact named `Vitalis-3.15.0-rc1-physical-hotfix-qa` was generated.
+
+This evidence clears only the automated hotfix regression gate. Voice and live nutrition analysis remain **PHYSICAL RETEST REQUIRED**, while production signing, same-certificate upgrade, and complete physical acceptance remain blocked. PR #13 must stay open and the overall decision remains **RC FAIL**.
