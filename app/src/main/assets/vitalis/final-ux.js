@@ -181,9 +181,26 @@
       return metricCard(id,"Corps",weight,"kg",health.bodyFatPercent != null ? Number(health.bodyFatPercent).toFixed(1) + " % masse grasse" : "Composition indisponible",null,spark(health.history && health.history.weight,"Tendance du poids"),"<button class='vux-card-action' data-act='measure'>Ajouter une mesure</button>");
     }
     if (id === "coach") {
-      coach = window.VitalisCoaches && window.VitalisCoaches.selected ? window.VitalisCoaches.selected() : {name:"Kofi",role:"Coach santé global",image:"kofi.webp"};
+      coach = window.VitalisCoaches && window.VitalisCoaches.selected ? window.VitalisCoaches.selected() : {id:"general",name:"Kofi",role:"Coach santé global",image:"kofi.webp"};
       var base = location.hostname.indexOf("chatgpt.site") >= 0 ? location.origin + "/__vitalis/coaches/" : "https://appassets.androidplatform.net/assets/vitalis/coaches/";
-      return "<article class='vux-card vux-coach-card' data-widget='coach' data-detail='coach' tabindex='0' role='button'><img src='" + base + esc(coach.image || "kofi.webp") + "' alt=''><div><span class='vux-eyebrow'>COACH DU JOUR</span><h3>" + esc(coach.name || "Kofi") + "</h3><p>" + esc(coach.role || "Coach Vitalis") + "</p><button data-act='coach'>Parler à " + esc(coach.name || "Kofi") + "</button></div></article>";
+      var roster = window.VitalisCoaches && Array.isArray(window.VitalisCoaches.all) ? window.VitalisCoaches.all : [
+        {id:"general",name:"Kofi",role:"Santé globale",image:"kofi.webp"},
+        {id:"nutrition",name:"Ama",role:"Nutrition",image:"ama.webp"},
+        {id:"activity",name:"Ayo",role:"Activité",image:"ayo.webp"},
+        {id:"sleep",name:"Nia",role:"Sommeil",image:"nia.webp"},
+        {id:"recovery",name:"Sékou",role:"Récupération",image:"sekou.webp"},
+        {id:"mental",name:"Zuri",role:"Bien-être mental",image:"zuri.webp"}
+      ];
+      var rosterHtml = roster.map(function (item) {
+        var active = item.id === (coach.id || "general") ? " active" : "";
+        return "<button type='button' class='vux-coach-chip" + active + "' data-coach-select='" + esc(item.id) + "' aria-label='Choisir " + esc(item.name) + "'>" +
+          "<img src='" + base + esc(item.image) + "' alt=''><span><b>" + esc(item.name) + "</b><small>" + esc(item.role) + "</small></span></button>";
+      }).join("");
+      return "<section class='vux-card vux-coach-card vux-coach-suite' data-widget='coach'>" +
+        "<div class='vux-coach-feature' data-detail='coach' tabindex='0' role='button'><img class='vux-coach-hero' src='" + base + esc(coach.image || "kofi.webp") + "' alt='" + esc(coach.name || "Kofi") + "'>" +
+        "<div class='vux-coach-copy'><span class='vux-eyebrow'>VOTRE ÉQUIPE VITALIS</span><h3>" + esc(coach.name || "Kofi") + "</h3><p>" + esc(coach.role || "Coach Vitalis") + "</p>" +
+        "<small>Conseils adaptés aux données et à la date sélectionnée.</small><button class='vux-coach-primary' data-act='coach'>Parler à " + esc(coach.name || "Kofi") + "</button></div></div>" +
+        "<div class='vux-coach-roster' aria-label='Choisir un coach'>" + rosterHtml + "</div></section>";
     }
     if (id === "quick") {
       return "<section class='vux-quick' data-widget='quick'><div class='vux-section-heading'><div><span class='vux-eyebrow'>AUJOURD’HUI</span><h2>Actions rapides</h2></div></div><div class='vux-quick-grid'>" +
@@ -217,6 +234,17 @@
     bindCards();
   }
   function bindCards() {
+    root.querySelectorAll("[data-coach-select]").forEach(function (button) {
+      button.onclick = function (event) {
+        event.preventDefault();
+        event.stopPropagation();
+        var id = button.getAttribute("data-coach-select");
+        if (window.VitalisCoaches && window.VitalisCoaches.select) {
+          window.VitalisCoaches.select(id);
+          setTimeout(render, 40);
+        }
+      };
+    });
     root.querySelectorAll("[data-detail]").forEach(function (card) {
       card.onclick = function (event) {
         if (event.target.closest("button,input,select,.vux-drag-handle")) return;
@@ -419,8 +447,33 @@ body.vitalis-final-ux-active{margin:0!important;background:var(--vux-bg)!importa
 `;
     document.head.appendChild(style);
   }
+  function installPremiumPolish() {
+    if (document.getElementById("vitalis-premium-polish")) return;
+    var premium = document.createElement("style");
+    premium.id = "vitalis-premium-polish";
+    premium.textContent = [
+      "#vitalis-final-ux{background:radial-gradient(circle at 15% -10%,color-mix(in srgb,var(--vux-accent) 12%,transparent),transparent 34%),var(--vux-bg)}",
+      ".vux-card{border-color:color-mix(in srgb,var(--vux-border) 78%,transparent);box-shadow:0 12px 30px rgba(8,37,29,.07),0 2px 8px rgba(8,37,29,.04);transition:transform .18s ease,box-shadow .18s ease,border-color .18s ease}",
+      ".vux-card:active{transform:scale(.992)}",
+      ".vux-score-card{background:linear-gradient(145deg,color-mix(in srgb,var(--vux-surface) 92%,var(--vux-accent) 8%),var(--vux-surface));overflow:hidden}",
+      ".vux-quick-action{border:1px solid color-mix(in srgb,var(--vux-border) 80%,transparent);box-shadow:0 8px 20px rgba(8,37,29,.055);border-radius:20px}",
+      ".vux-coach-suite{display:block!important;padding:0!important;overflow:hidden}",
+      ".vux-coach-feature{display:grid;grid-template-columns:104px 1fr;gap:16px;align-items:center;padding:18px;background:linear-gradient(135deg,color-mix(in srgb,var(--vux-accent) 12%,var(--vux-surface)),var(--vux-surface));cursor:pointer}",
+      ".vux-coach-hero{width:104px;height:104px;border-radius:28px;object-fit:cover;object-position:center 28%;box-shadow:0 12px 30px rgba(6,60,48,.18)}",
+      ".vux-coach-copy h3{font-size:1.45rem;margin:4px 0 2px}.vux-coach-copy p{margin:0 0 4px;font-weight:750}.vux-coach-copy small{display:block;color:var(--vux-muted);line-height:1.35}",
+      ".vux-coach-primary{margin-top:12px;border:0;border-radius:999px!important;padding:10px 16px!important;background:var(--vux-primary)!important;color:#fff!important;font-weight:800!important;min-height:42px!important}",
+      ".vux-coach-roster{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;padding:12px;background:color-mix(in srgb,var(--vux-surface) 96%,var(--vux-bg))}",
+      ".vux-coach-chip{display:flex!important;align-items:center!important;gap:8px!important;min-height:58px!important;padding:7px!important;border:1px solid var(--vux-border)!important;border-radius:16px!important;background:var(--vux-surface)!important;color:var(--vux-text)!important;text-align:left!important}",
+      ".vux-coach-chip.active{border-color:var(--vux-accent)!important;box-shadow:0 0 0 2px color-mix(in srgb,var(--vux-accent) 18%,transparent)!important}",
+      ".vux-coach-chip img{width:42px;height:42px;border-radius:13px;object-fit:cover;object-position:center 28%}.vux-coach-chip span{min-width:0}.vux-coach-chip b,.vux-coach-chip small{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.vux-coach-chip b{font-size:.82rem}.vux-coach-chip small{font-size:.66rem;color:var(--vux-muted);margin-top:1px}",
+      ".vux-bottom-nav{box-shadow:0 -12px 30px rgba(8,37,29,.08);border-top-color:color-mix(in srgb,var(--vux-border) 70%,transparent);backdrop-filter:blur(18px)}",
+      "@media(max-width:520px){.vux-coach-feature{grid-template-columns:82px 1fr;padding:15px;gap:13px}.vux-coach-hero{width:82px;height:82px;border-radius:23px}.vux-coach-roster{grid-template-columns:repeat(2,minmax(0,1fr))}.vux-coach-copy h3{font-size:1.25rem}}"
+    ].join("");
+    document.head.appendChild(premium);
+  }
+
   function mount() {
-    installStyles(); applyTheme();
+    installStyles(); installPremiumPolish(); applyTheme();
     document.body.classList.add("vitalis-final-ux-active");
     root=document.createElement("div");root.id="vitalis-final-ux";root.setAttribute("data-density",settings.density);
     root.innerHTML="<header class='vux-appbar'><div class='vux-appbar-top'><div class='vux-brand'><span class='vux-logo'>"+icon("score")+"</span><div><b>Vitalis</b><small>Santé quotidienne, simplement</small></div></div><button class='vux-icon-button' data-settings aria-label='Ouvrir les réglages'>"+icon("settings")+"</button></div><div class='vux-datebar'><button data-prev aria-label='Jour précédent'>‹</button><button class='vux-date-button' data-calendar>"+icon("calendar")+"<span data-date-label></span><input data-date-input type='date' aria-label='Choisir la date'></button><button data-next aria-label='Jour suivant'>›</button></div></header><main class='vux-content'><div class='vux-context'><div><h1>Votre journée santé</h1><p data-last-updated></p></div></div><div class='vux-offline hidden' data-offline>"+icon("offline")+"<span>Mode hors ligne — les données affichées sont mises en cache.</span></div><div class='vux-grid' data-widgets></div></main><nav class='vux-bottom-nav' aria-label='Navigation principale'><button class='active' data-nav='home'>"+icon("score")+"<span>Accueil</span></button><button data-nav='coach'>"+icon("coach")+"<span>Coach</span></button><button data-nav='sources'>"+icon("sources")+"<span>Sources</span></button><button data-nav='customize'>"+icon("customize")+"<span>Widgets</span></button><button data-nav='settings'>"+icon("settings")+"<span>Réglages</span></button></nav>";
