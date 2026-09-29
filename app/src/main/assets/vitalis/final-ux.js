@@ -196,8 +196,8 @@
         return "<button type='button' class='vux-coach-chip" + active + "' data-coach-select='" + esc(item.id) + "' aria-label='Choisir " + esc(item.name) + "'>" +
           "<img src='" + base + esc(item.image) + "' alt=''><span><b>" + esc(item.name) + "</b><small>" + esc(item.role) + "</small></span></button>";
       }).join("");
-      return "<section class='vux-card vux-coach-card vux-coach-suite' data-widget='coach'>" +
-        "<div class='vux-coach-feature' data-detail='coach' tabindex='0' role='button'><img class='vux-coach-hero' src='" + base + esc(coach.image || "kofi.webp") + "' alt='" + esc(coach.name || "Kofi") + "'>" +
+      return "<section class='vux-card vux-coach-card vux-coach-suite' data-widget='coach' data-detail='coach' tabindex='0' role='button'>" +
+        "<div class='vux-coach-feature'><img class='vux-coach-hero' src='" + base + esc(coach.image || "kofi.webp") + "' alt='" + esc(coach.name || "Kofi") + "'>" +
         "<div class='vux-coach-copy'><span class='vux-eyebrow'>VOTRE ÉQUIPE VITALIS</span><h3>" + esc(coach.name || "Kofi") + "</h3><p>" + esc(coach.role || "Coach Vitalis") + "</p>" +
         "<small>Conseils adaptés aux données et à la date sélectionnée.</small><button class='vux-coach-primary' data-act='coach'>Parler à " + esc(coach.name || "Kofi") + "</button></div></div>" +
         "<div class='vux-coach-roster' aria-label='Choisir un coach'>" + rosterHtml + "</div></section>";
