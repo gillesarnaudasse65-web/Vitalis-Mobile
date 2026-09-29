@@ -577,8 +577,15 @@ class MainActivity : ComponentActivity() {
         }.getOrNull() ?: return
         scripts.addAll(loadedLayers)
 
-        // Evaluate the bundled layers one by one. A runtime failure in a legacy/remote
-        // compatibility layer must not prevent the local Final UX dashboard from mounting.
+        // Keep the deterministic fixture bootstrap byte-for-byte equivalent to the previous
+        // path so upgrade-continuity tests preserve their established storage timing.
+        if (stabilizedFixture) {
+            view.evaluateJavascript(scripts.joinToString("\n;\n"), null)
+            return
+        }
+
+        // Evaluate the bundled production layers one by one. A runtime failure in a legacy/
+        // remote compatibility layer must not prevent the local Final UX dashboard mounting.
         fun evaluateLayer(index: Int) {
             if (index >= scripts.size) {
                 if (!stabilizedFixture) verifyFinalUxMounted(view, 0)
