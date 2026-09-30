@@ -1,17 +1,16 @@
 (function () {
-  if (window.__vitalisPowerLayer312) return;
-  window.__vitalisPowerLayer312 = true;
+  if (window.__vitalisPowerLayer312 === "ready" || window.__vitalisPowerLayer312 === "initializing") return;
+  window.__vitalisPowerLayer312 = "initializing";
 
   var bridge = window.VitalisAndroid || null;
-  var ASSET_BASE = location.hostname === "vitalis-health-os.gillesarnaudasse65.chatgpt.site"
-    ? location.origin + "/__vitalis/coaches/"
-    : "https://appassets.androidplatform.net/assets/vitalis/coaches/";
+  var ASSET_BASE = "https://appassets.androidplatform.net/assets/vitalis/coaches/";
   var SELECTED_COACH_KEY = "vitalis-selected-coach-v312";
   var selectedCoachId = localStorage.getItem(SELECTED_COACH_KEY) || "general";
   var voiceOn = true;
   var pending = {};
   var conversations = {};
   var activeNutritionScan = null;
+  var nutritionGateRoot = null;
   var connectorState = readJsonBridge("getConnectorStatus", {connectors:[], connectorCount:0});
   var recoveredNutritionScan = readJsonBridge("getPendingNutritionScan", null);
   if (recoveredNutritionScan && recoveredNutritionScan.scanId) {
@@ -19,6 +18,10 @@
       scanId:recoveredNutritionScan.scanId,
       capturedSelectedDate:recoveredNutritionScan.selectedDate,
       source:recoveredNutritionScan.source,
+      preview:recoveredNutritionScan.previewUrl || null,
+      metadata:recoveredNutritionScan.image || null,
+      uiState:recoveredNutritionScan.uiState || null,
+      draftResult:recoveredNutritionScan.draftResult || null,
       recovered:true
     };
   }
@@ -84,6 +87,43 @@
     return ASSET_BASE + coach.image;
   }
 
+  function coachAvatarDataUrl(coach) {
+    var initial = String(coach && coach.name || "V").trim().charAt(0).toUpperCase() || "V";
+    var label = String(coach && coach.name || "Vitalis").replace(/[<>&"']/g, "");
+    var svg = "<svg xmlns='http://www.w3.org/2000/svg' width='320' height='320' viewBox='0 0 320 320'>" +
+      "<defs><linearGradient id='g' x1='0' y1='0' x2='1' y2='1'><stop stop-color='#063c30'/><stop offset='1' stop-color='#17a673'/></linearGradient></defs>" +
+      "<rect width='320' height='320' rx='56' fill='url(#g)'/><circle cx='160' cy='132' r='72' fill='rgba(255,255,255,.14)'/>" +
+      "<text x='160' y='165' text-anchor='middle' font-family='sans-serif' font-size='96' font-weight='700' fill='white'>" + initial + "</text>" +
+      "<text x='160' y='272' text-anchor='middle' font-family='sans-serif' font-size='28' font-weight='600' fill='white'>" + label + "</text></svg>";
+    return "data:image/svg+xml;charset=UTF-8," + encodeURIComponent(svg);
+  }
+
+  function protectCoachImage(image, coach) {
+    if (!image || !coach) return;
+    image.setAttribute("data-vitalis-coach-id", coach.id);
+    image.alt = image.alt || (coach.name + ", " + coach.role);
+    if (image.__vitalisImageProtected) return;
+    image.__vitalisImageProtected = true;
+    image.addEventListener("error", function () {
+      if (image.getAttribute("data-vitalis-avatar-fallback") === "true") return;
+      image.setAttribute("data-vitalis-avatar-fallback", "true");
+      image.removeAttribute("srcset");
+      image.src = coachAvatarDataUrl(coach);
+    });
+  }
+
+  function protectCoachImages(scope) {
+    var host = scope && scope.querySelectorAll ? scope : document;
+    Array.prototype.slice.call(host.querySelectorAll("img")).forEach(function (image) {
+      var marker = image.getAttribute("data-vitalis-coach-id") || "";
+      var haystack = norm(marker + " " + (image.alt || "") + " " + (image.getAttribute("src") || ""));
+      var coach = coaches.filter(function (item) {
+        return item.id === marker || haystack.indexOf(norm(item.name)) >= 0 || haystack.indexOf(item.image) >= 0;
+      })[0];
+      if (coach) protectCoachImage(image, coach);
+    });
+  }
+
   function selectedDate() {
     if (window.VitalisDate) return window.VitalisDate.get();
     var nativeData = readJsonBridge("getLastHealthData", {});
@@ -106,6 +146,7 @@
       ".vitalis-developer-card-312{display:flex;align-items:center;gap:12px;border:1px solid #cfdcd6;border-radius:18px;padding:13px;background:linear-gradient(135deg,#f0f7f4,#fff);width:100%;text-align:left;color:#14342b}" +
       ".vitalis-developer-icon-312{width:54px;height:54px;border-radius:17px;background:#063c30;color:#fff;display:grid;place-items:center;font-size:24px}" +
       ".vitalis-ai-avatar-312{width:48px;height:48px;border-radius:15px;object-fit:cover;object-position:center 30%}" +
+      ".vitalis-voice-status-312{font-size:12px;color:#405c53;padding:7px 2px;display:flex;align-items:center;justify-content:space-between;gap:8px}.vitalis-voice-status-312 button{border:0;border-radius:10px;padding:7px 9px;background:#e4ece8;color:#173f33;font-weight:700}" +
       ".vitalis-agent-chip-312{display:inline-block;border-radius:999px;background:#e2f3e9;color:#063c30;padding:5px 8px;font-size:10px;font-weight:800;margin-top:4px}" +
       ".vitalis-developer-response-312{white-space:pre-wrap;background:#fff;border:1px solid #e0e7e3;border-radius:16px;padding:13px;line-height:1.5;font-size:13px;margin:10px 0}" +
       ".vitalis-meal-grid-312{display:grid;grid-template-columns:1fr 1fr;gap:9px}.vitalis-meal-grid-312 label{font-size:11px;color:#687970}.vitalis-meal-grid-312 input{width:100%;box-sizing:border-box;margin-top:4px;border:1px solid #cad7d1;border-radius:11px;padding:10px;background:#fff}" +
@@ -116,6 +157,16 @@
       ".vitalis-status-312{border-radius:999px;padding:5px 8px;font-size:10px;font-weight:800;background:#edf1ef;color:#52645d}.vitalis-status-312.connected{background:#dff4e7;color:#075f45}.vitalis-status-312.installed{background:#fff1c9;color:#775b00}";
     document.head.appendChild(style);
   }
+
+  document.addEventListener("error", function (event) {
+    var image = event.target;
+    if (!image || !image.classList || !image.classList.contains("vitalis-meal-preview-312")) return;
+    var placeholder = document.createElement("div");
+    placeholder.className = "vitalis-meal-status-312";
+    placeholder.setAttribute("role", "status");
+    placeholder.textContent = "Aperçu temporaire indisponible. La photo ne sera jamais affichée comme une image cassée.";
+    if (image.parentNode) image.parentNode.replaceChild(placeholder, image);
+  }, true);
 
   function overlay(titleHtml, bodyHtml, className) {
     installStyles();
@@ -143,11 +194,16 @@
   }
 
   function setSelectedCoach(id) {
-    selectedCoachId = coachById(id).id;
+    var selected = coachById(id);
+    selectedCoachId = selected.id;
     localStorage.setItem(SELECTED_COACH_KEY, selectedCoachId);
     window.dispatchEvent(new CustomEvent("vitalis-local-state-changed"));
     document.documentElement.setAttribute("data-vitalis-selected-coach", selectedCoachId);
     updateExistingCoachCard();
+    window.dispatchEvent(new CustomEvent("vitalis-coach-changed", {
+      detail:{id:selected.id,name:selected.name,role:selected.role,image:selected.image}
+    }));
+    return selected;
   }
 
   function updateExistingCoachCard() {
@@ -182,9 +238,12 @@
       var avatar = host.querySelector(".avatar,[class*='avatar']");
       if (avatar && !avatar.querySelector("img")) {
         avatar.textContent = "";
-        avatar.style.backgroundImage = "url('" + imageUrl(coach) + "')";
-        avatar.style.backgroundSize = "cover";
-        avatar.style.backgroundPosition = "center 30%";
+        var avatarImage = document.createElement("img");
+        avatarImage.src = imageUrl(coach);
+        avatarImage.alt = coach.name + ", " + coach.role;
+        avatarImage.style.cssText = "width:100%;height:100%;object-fit:cover;object-position:center 30%;border-radius:inherit";
+        avatar.appendChild(avatarImage);
+        protectCoachImage(avatarImage, coach);
       }
       var image = host.querySelector("img");
       if (image && /coach|kofi|aina|malik|avatar/.test(norm(
@@ -192,8 +251,10 @@
       ))) {
         if (image.src !== imageUrl(coach)) image.src = imageUrl(coach);
         image.alt = coach.name + ", " + coach.role;
+        protectCoachImage(image, coach);
       }
     });
+    protectCoachImages(document);
   }
 
   function healthAiConfigured() {
@@ -328,16 +389,18 @@
     var coach = coachById(coachId || selectedCoachId);
     setSelectedCoach(coach.id);
     var root = overlay(
-      '<img class="vitalis-ai-avatar-312" src="' + imageUrl(coach) + '" alt="' + esc(coach.name) + '">' +
+      '<img class="vitalis-ai-avatar-312" data-vitalis-coach-id="' + esc(coach.id) + '" src="' + imageUrl(coach) + '" alt="' + esc(coach.name) + '">' +
       '<div style="flex:1"><h3>' + esc(coach.name) + '</h3><div class="vitalis-agent-chip-312">' + esc(coach.role) + '</div></div>' +
       '<button class="vitalis-ai-icon" data-agent-voice title="Activer ou couper la voix">🔊</button>' +
       '<button class="vitalis-ai-icon" data-agent-settings title="Réglages IA">⚙</button>',
       '<div class="vitalis-ai-chat" data-agent-chat></div>' +
+      '<div class="vitalis-voice-status-312" data-agent-voice-status aria-live="polite">Ready</div>' +
       '<div class="vitalis-ai-compose"><button class="vitalis-ai-icon" data-agent-mic title="Dicter">🎙️</button>' +
       '<textarea rows="2" data-agent-input placeholder="Demandez conseil à ' + esc(coach.name) + '…"></textarea>' +
       '<button class="vitalis-ai-send" data-agent-send>Envoyer</button></div>',
       "vitalis-coach-overlay-312"
     );
+    protectCoachImages(root);
     var chat = root.querySelector("[data-agent-chat]");
     var input = root.querySelector("[data-agent-input]");
     var send = root.querySelector("[data-agent-send]");
@@ -421,7 +484,7 @@
       return '<button type="button" class="vitalis-coach-card-312 ' + (coach.id === selected.id ? "selected" : "") +
         '" data-coach-312="' + coach.id + '" aria-label="' + esc(coach.name) + ' — ' + esc(coach.role) +
         '" aria-pressed="' + (coach.id === selected.id ? 'true' : 'false') +
-        '"><img class="vitalis-portrait-312" src="' + imageUrl(coach) +
+        '"><img class="vitalis-portrait-312" data-vitalis-coach-id="' + esc(coach.id) + '" src="' + imageUrl(coach) +
         '" alt="' + esc(coach.name) + '"><strong>' + esc(coach.name) + '</strong><small>' +
         esc(coach.role) + '</small>' + (coach.id === selected.id ? '<span class="vitalis-selected-badge-312">Actif</span>' : "") +
         "</button>";
@@ -433,6 +496,7 @@
       '<button class="vitalis-developer-card-312" data-open-developer-312><span class="vitalis-developer-icon-312">⌘</span>' +
       '<span><strong>Vitalis Developer AI</strong><small>Prépare vos demandes de modification et les transmet à ChatGPT Work.</small></span></button>'
     );
+    protectCoachImages(root);
     root.addEventListener("click", function (event) {
       var card = event.target.closest && event.target.closest("[data-coach-312]");
       if (card) {
@@ -602,6 +666,95 @@
     bridge.analyzeMealSession(scan.scanId, requestId);
   }
 
+  function closeNutritionGate() {
+    if (nutritionGateRoot && nutritionGateRoot.isConnected) nutritionGateRoot.remove();
+    nutritionGateRoot = null;
+  }
+
+  function renderNutritionReadiness(detail) {
+    if (!activeNutritionScan || detail.scanId !== activeNutritionScan.scanId) return;
+    var scan = activeNutritionScan;
+    scan.aiConfigured = !!detail.aiConfigured;
+    scan.consented = !!detail.consented;
+    scan.uiState = detail.uiState || "PHOTO_READY";
+    closeNutritionGate();
+    if (scan.uiState === "ANALYZING" || scan.uiState === "ANALYSIS_SUCCESS") return;
+    var preview = scan.preview
+      ? '<img class="vitalis-meal-preview-312" src="' + esc(scan.preview) + '" alt="Photo normalisée du repas">'
+      : "";
+    var keyLabel = scan.aiConfigured ? "IA configurée" : "Configuration IA requise";
+    if (scan.uiState === "AI_KEY_REQUIRED") {
+      nutritionGateRoot = overlay(
+        '<div><h3>Photo prête</h3><div class="vitalis-agent-chip-312">' + keyLabel + '</div></div>',
+        preview +
+        '<p class="vitalis-ai-note">Photo prête. Configurez la clé IA pour lancer l’analyse.</p>' +
+        '<div class="vitalis-meal-actions-312"><button class="vitalis-ai-primary" data-nutrition-key>Configurer la clé IA</button><button class="vitalis-meal-secondary-312" data-manual-nutrition>Correction manuelle</button><button class="vitalis-meal-secondary-312" data-cancel-nutrition>Annuler</button></div>'
+      );
+      nutritionGateRoot.querySelector("[data-nutrition-key]").onclick = function () {
+        if (bridge && bridge.openKeySettings) bridge.openKeySettings("health");
+      };
+    } else if (scan.uiState === "AI_CONSENT_REQUIRED") {
+      nutritionGateRoot = overlay(
+        '<div><h3>Consentement requis</h3><div class="vitalis-agent-chip-312">' + keyLabel + '</div></div>',
+        preview +
+        '<p class="vitalis-ai-note">Votre photo est prête. Votre consentement est requis avant son envoi à OpenAI.</p>' +
+        '<div class="vitalis-meal-actions-312"><button class="vitalis-ai-primary" data-nutrition-consent>Autoriser et analyser</button><button class="vitalis-meal-secondary-312" data-manual-nutrition>Correction manuelle</button><button class="vitalis-meal-secondary-312" data-cancel-nutrition>Annuler</button></div>'
+      );
+      nutritionGateRoot.querySelector("[data-nutrition-consent]").onclick = function () {
+        scan.analyzeWhenReady = true;
+        if (bridge && bridge.setAiHealthConsent) bridge.setAiHealthConsent(true);
+      };
+    } else if (scan.uiState === "READY_FOR_ANALYSIS") {
+      if (scan.analyzeWhenReady) {
+        scan.analyzeWhenReady = false;
+        analyzeNutritionScan(scan.scanId);
+        return;
+      }
+      nutritionGateRoot = overlay(
+        '<div><h3>Photo prête</h3><div class="vitalis-agent-chip-312">' + keyLabel + '</div></div>',
+        preview +
+        '<p class="vitalis-ai-note">La photo est validée localement. Elle peut maintenant être envoyée pour analyse.</p>' +
+        '<div class="vitalis-meal-actions-312"><button class="vitalis-ai-primary" data-nutrition-analyze>Analyser la photo</button><button class="vitalis-meal-secondary-312" data-manual-nutrition>Correction manuelle</button><button class="vitalis-meal-secondary-312" data-cancel-nutrition>Annuler</button></div>'
+      );
+      nutritionGateRoot.querySelector("[data-nutrition-analyze]").onclick = function () {
+        closeNutritionGate();
+        analyzeNutritionScan(scan.scanId);
+      };
+    } else if (/^(ANALYSIS_ERROR|API_AUTH_ERROR|API_QUOTA_ERROR|NETWORK_ERROR|INVALID_RESPONSE)$/.test(scan.uiState)) {
+      var errorMessages = {
+        API_AUTH_ERROR:"La clé IA n’est pas acceptée. Vérifiez-la dans les réglages puis réessayez.",
+        API_QUOTA_ERROR:"Le quota IA est atteint. La photo est conservée temporairement pour un nouvel essai.",
+        NETWORK_ERROR:"La connexion ou le service est momentanément indisponible. La même photo peut être réessayée.",
+        INVALID_RESPONSE:"La réponse reçue n’est pas exploitable. Réessayez avec la même photo.",
+        ANALYSIS_ERROR:detail.errorCode === "photo_cache_missing" ?
+          "La photo temporaire n’est plus disponible. Sélectionnez une nouvelle photo." :
+          "L’analyse n’a pas abouti. Vous pouvez réessayer avec la même photo."
+      };
+      nutritionGateRoot = overlay(
+        '<div><h3>Analyse interrompue</h3><div class="vitalis-agent-chip-312">Aucune donnée perdue silencieusement</div></div>',
+        preview + '<p class="vitalis-ai-note">' + esc(errorMessages[scan.uiState]) + '</p>' +
+        '<div class="vitalis-meal-actions-312">' +
+        (scan.preview ? '<button class="vitalis-ai-primary" data-nutrition-retry>Réessayer l’analyse</button>' : '<button class="vitalis-ai-primary" data-nutrition-new>Choisir une nouvelle photo</button>') +
+        '<button class="vitalis-meal-secondary-312" data-manual-nutrition>Correction manuelle</button><button class="vitalis-meal-secondary-312" data-cancel-nutrition>Annuler</button></div>'
+      );
+      var retry = nutritionGateRoot.querySelector("[data-nutrition-retry]");
+      var fresh = nutritionGateRoot.querySelector("[data-nutrition-new]");
+      if (retry) retry.onclick = function () { closeNutritionGate(); analyzeNutritionScan(scan.scanId); };
+      if (fresh) fresh.onclick = function () { if (bridge && bridge.cancelNutritionScan) bridge.cancelNutritionScan(scan.scanId); activeNutritionScan=null; closeNutritionGate(); chooseNutritionSource(); };
+    } else return;
+    var manual = nutritionGateRoot.querySelector("[data-manual-nutrition]");
+    var cancel = nutritionGateRoot.querySelector("[data-cancel-nutrition]");
+    if (manual) manual.onclick = function () {
+      closeNutritionGate();
+      showMealReview({reviewable:true,savable:true,errors:[],warnings:["manual_entry"],estimate:{mealName:"",foodItems:[],portionDescription:null,confidence:0,uncertaintyNotes:"Saisie manuelle."}}, scan);
+    };
+    if (cancel) cancel.onclick = function () {
+      if (bridge && bridge.cancelNutritionScan) bridge.cancelNutritionScan(scan.scanId);
+      activeNutritionScan = null;
+      closeNutritionGate();
+    };
+  }
+
   function chooseNutritionSource() {
     var root = overlay(
       '<div><h3>Scanner un repas</h3><div class="vitalis-agent-chip-312">Sélection locale sécurisée</div></div>',
@@ -696,35 +849,19 @@
     activeNutritionScan.preview = detail.preview || null;
     activeNutritionScan.metadata = detail.metadata || null;
     var status = document.querySelector("[data-nutrition-status]");
-    if (status) status.textContent = "Photo validée et normalisée. Analyse en cours…";
-    if (!healthAiConfigured() && activeNutritionScan.source !== "synthetic_test") {
-      var scan = activeNutritionScan;
-      var root = overlay(
-        '<div><h3>Consentement requis</h3><div class="vitalis-agent-chip-312">Aucun envoi effectué</div></div>',
-        '<img class="vitalis-meal-preview-312" src="' + esc(scan.preview) + '" alt="Photo normalisée du repas">' +
-        '<p class="vitalis-ai-note">La sélection et la normalisation sont locales. L’analyse enverra cette photo au service IA externe OpenAI.</p>' +
-        '<div class="vitalis-meal-actions-312"><button class="vitalis-ai-primary" data-configure-nutrition>Configurer et consentir</button><button class="vitalis-meal-secondary-312" data-manual-nutrition>Correction manuelle</button><button class="vitalis-meal-secondary-312" data-cancel-nutrition>Annuler</button></div>'
-      );
-      root.querySelector("[data-configure-nutrition]").onclick = function () {
-        configureHealthAi(coachById("nutrition"), function () { analyzeNutritionScan(scan.scanId); });
-      };
-      root.querySelector("[data-manual-nutrition]").onclick = function () {
-        root.remove();
-        showMealReview({reviewable:true,savable:true,errors:[],warnings:["manual_entry"],estimate:{mealName:"",foodItems:[],portionDescription:null,confidence:0,uncertaintyNotes:"Saisie manuelle."}}, scan);
-      };
-      root.querySelector("[data-cancel-nutrition]").onclick = function () {
-        bridge.cancelNutritionScan(scan.scanId); activeNutritionScan = null; root.remove();
-      };
-      return;
-    }
-    analyzeNutritionScan(detail.scanId);
+    if (status) status.textContent = "Photo validée et normalisée.";
+    if (activeNutritionScan.source === "synthetic_test") analyzeNutritionScan(detail.scanId);
+  });
+
+  window.addEventListener("vitalis-nutrition-analysis-readiness", function (event) {
+    renderNutritionReadiness(event.detail || {});
   });
 
   window.addEventListener("vitalis-nutrition-scan-state", function (event) {
     var detail = event.detail || {};
     if (!activeNutritionScan || detail.scanId !== activeNutritionScan.scanId) return;
     var status = document.querySelector("[data-nutrition-status]");
-    if (status) status.textContent = {
+    if (status) status.textContent = detail.message || {
       selecting_image:"Sélection de la photo…", normalizing:"Validation et normalisation locales…",
       ready_for_analysis:"Photo prête pour l’analyse.", analyzing:"Analyse nutritionnelle externe en cours…",
       review:"Estimation prête à vérifier.", saving:"Enregistrement local…",
@@ -760,6 +897,7 @@
       health_connect_data_available:"Données détectées via Health Connect",
       health_connect_available_no_data:"Accès Health Connect activé, aucune donnée",
       health_connect_permission_required:"Autorisation Health Connect requise",
+      health_connect_partial_permission:"Autorisations Health Connect partielles",
       setup_required:"Configuration requise", api_unavailable:"Connexion directe non implémentée",
       unsupported:"Non pris en charge sur Android", unavailable:"Indisponible",
       not_installed:"Non installé", installed:"Installé"
@@ -777,7 +915,10 @@
 
   function showConnectors() {
     connectorState = readJsonBridge("getConnectorStatus", connectorState);
-    var items = connectorState.connectors || [];
+    if (!connectorState || typeof connectorState !== "object") {
+      connectorState = {connectors:[], connectorCount:0};
+    }
+    var items = Array.isArray(connectorState.connectors) ? connectorState.connectors : [];
     var cards = items.map(function (item) {
       return '<div class="vitalis-connector-card-312"><div class="vitalis-connector-top-312"><b>' +
         esc(item.name || item.packageName) + '</b><span class="vitalis-status-312 ' + esc(item.status) + '">' +
@@ -853,11 +994,37 @@
     if (bridge && bridge.stopVoiceInput) bridge.stopVoiceInput();
   });
 
+  window.addEventListener("vitalis-voice-state", function (event) {
+    var detail = event.detail || {};
+    var root = document.querySelector(".vitalis-coach-overlay-312");
+    if (!root) return;
+    var mic = root.querySelector("[data-agent-mic]");
+    var status = root.querySelector("[data-agent-voice-status]");
+    if (mic) {
+      mic.textContent = detail.microphoneEnabled ? "⏹" : "🎙️";
+      mic.setAttribute("aria-pressed", detail.microphoneEnabled ? "true" : "false");
+    }
+    if (status) {
+      status.textContent = detail.message || "Recognition failed";
+      if (detail.action === "open_app_settings") {
+        var action = document.createElement("button");
+        action.type = "button";
+        action.textContent = "Open App Settings";
+        action.onclick = function () {
+          if (bridge && bridge.openAppSettings) bridge.openAppSettings();
+        };
+        status.appendChild(action);
+      }
+    }
+  });
+
   document.addEventListener("click", function (event) {
     var target = event.target && event.target.closest
       ? event.target.closest("button,a,[role='button']")
       : null;
-    if (!target || target.closest(".vitalis-power-overlay-312")) return;
+    if (!target) return;
+    if (target.closest("#vitalis-final-ux")) return;
+    if (target.closest(".vitalis-power-overlay-312")) return;
     var label = norm((target.innerText || target.textContent || "") + " " +
       (target.getAttribute("aria-label") || "") + " " + (target.getAttribute("title") || ""));
     if (/changer.*coach|change.*coach|choisir.*coach|selectionner.*coach|tous.*coach|mes.*coach|equipe.*coach/.test(label)) {
@@ -906,7 +1073,10 @@
     selected:function () { return coachById(selectedCoachId); },
     open:showCoachCatalog,
     ask:function (coach) { openCoach(coach && coach.id || selectedCoachId, coach && coach.prompt); },
-    select:function (id) { setSelectedCoach(id); openCoach(id); },
+    // Selection is a state change, not an implicit navigation. Call ask() to
+    // open the selected coach conversation. Keeping both operations separate
+    // makes repeated taps deterministic on a real touch screen.
+    select:function (id) { return setSelectedCoach(id); },
     refresh:function () {
       if (window.VitalisDate) window.VitalisDate.refresh();
       else if (bridge && bridge.refreshHealthDataForDate) bridge.refreshHealthDataForDate(selectedDate());
@@ -923,8 +1093,26 @@
     }
   });
 
+  window.VitalisImageReliability = {
+    apply: protectCoachImages,
+    fallbackFor: function (id) { return coachAvatarDataUrl(coachById(id)); },
+    assetBase: ASSET_BASE
+  };
+
+  if (activeNutritionScan && activeNutritionScan.recovered) {
+    setTimeout(function () {
+      if (!activeNutritionScan) return;
+      if (activeNutritionScan.draftResult && activeNutritionScan.draftResult.estimate) {
+        showMealReview(activeNutritionScan.draftResult, activeNutritionScan);
+      } else if (recoveredNutritionScan) {
+        renderNutritionReadiness(recoveredNutritionScan);
+      }
+    }, 250);
+  }
+
   setSelectedCoach(selectedCoachId);
   setTimeout(updateExistingCoachCard, 400);
   new MutationObserver(function () { setTimeout(updateExistingCoachCard, 30); })
     .observe(document.documentElement, {childList:true, subtree:true});
+  window.__vitalisPowerLayer312 = "ready";
 })();

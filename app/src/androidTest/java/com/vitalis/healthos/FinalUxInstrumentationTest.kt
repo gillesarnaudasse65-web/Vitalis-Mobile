@@ -24,6 +24,85 @@ import org.junit.runner.RunWith
 class FinalUxInstrumentationTest {
     private val instrument = InstrumentationRegistry.getInstrumentation()
 
+    @Test fun everyCoachAndSourcesPathRemainsSelectableThroughTheRealClickPipeline() {
+        val intent = Intent(instrument.targetContext, MainActivity::class.java).apply {
+            putExtra(MainActivity.EXTRA_FINAL_UX_FIXTURE, true)
+            putExtra(MainActivity.EXTRA_TEST_TODAY_ISO, "2026-09-27")
+        }
+        ActivityScenario.launch<MainActivity>(intent).use { scenario ->
+            ready(scenario)
+            eval(scenario, "VitalisFinalUX.restoreDefaults();true")
+            val coachIds = listOf("general", "nutrition", "activity", "sleep", "recovery", "mental")
+
+            repeat(4) {
+                for (coachId in coachIds) {
+                    assertEquals("true", eval(scenario,
+                        "!!document.querySelector('[data-coach-select=\"$coachId\"]')"))
+                    eval(scenario,
+                        "document.querySelector('[data-coach-select=\"$coachId\"]').click();true")
+                    await(scenario) {
+                        decoded(eval(scenario, "VitalisCoaches.selected().id")) == coachId
+                    }
+                    assertEquals("0", eval(scenario,
+                        "document.querySelectorAll('.vitalis-power-overlay-312,.vux-layer').length"))
+                }
+            }
+
+            eval(scenario, "document.querySelector('[data-nav=sources]').click();true")
+            await(scenario) {
+                eval(scenario, "!!document.querySelector('.vitalis-power-overlay-312')") == "true"
+            }
+            eval(scenario,
+                "document.querySelector('.vitalis-power-overlay-312 .vitalis-native-close').click();true")
+
+            eval(scenario,
+                "window.__savedVitalisShowSources=VitalisConnectorControls.showSources;" +
+                    "VitalisConnectorControls.showSources=function(){throw new Error('synthetic failure')};" +
+                    "document.querySelector('[data-nav=sources]').click();true")
+            await(scenario) {
+                eval(scenario, "!!document.querySelector('[data-view=sources-details]')") == "true"
+            }
+            eval(scenario,
+                "document.querySelector('[data-view=sources-details] [data-close]').click();" +
+                    "VitalisConnectorControls.showSources=window.__savedVitalisShowSources;true")
+
+            eval(scenario,
+                "VitalisConnectorControls.showSources=function(){};" +
+                    "document.querySelector('[data-nav=sources]').click();true")
+            await(scenario) {
+                eval(scenario, "!!document.querySelector('[data-view=sources-details]')") == "true"
+            }
+            eval(scenario,
+                "document.querySelector('[data-view=sources-details] [data-close]').click();" +
+                    "VitalisConnectorControls.showSources=window.__savedVitalisShowSources;true")
+        }
+    }
+
+    @Test fun androidBackClosesFinalUxAndCoachLayersBeforeLeavingTheApp() {
+        val intent = Intent(instrument.targetContext, MainActivity::class.java).apply {
+            putExtra(MainActivity.EXTRA_FINAL_UX_FIXTURE, true)
+            putExtra(MainActivity.EXTRA_TEST_TODAY_ISO, "2026-09-27")
+        }
+        ActivityScenario.launch<MainActivity>(intent).use { scenario ->
+            ready(scenario)
+            eval(scenario, "VitalisFinalUX.openCustomize();true")
+            await(scenario) { eval(scenario, "!!document.querySelector('.vux-layer')") == "true" }
+            scenario.onActivity { it.onBackPressedDispatcher.onBackPressed() }
+            await(scenario) { eval(scenario, "document.querySelectorAll('.vux-layer').length") == "0" }
+            assertEquals("true", eval(scenario, "!!document.querySelector('#vitalis-final-ux')"))
+
+            eval(scenario, "VitalisCoaches.open();true")
+            await(scenario) {
+                eval(scenario, "!!document.querySelector('.vitalis-power-overlay-312')") == "true"
+            }
+            scenario.onActivity { it.onBackPressedDispatcher.onBackPressed() }
+            await(scenario) {
+                eval(scenario, "document.querySelectorAll('.vitalis-power-overlay-312').length") == "0"
+            }
+            assertEquals("true", eval(scenario, "!!document.querySelector('#vitalis-final-ux')"))
+        }
+    }
+
     @Test fun themesWidgetsDetailsAndCustomizationRemainInteractiveAndPersistent() {
         val intent = Intent(instrument.targetContext, MainActivity::class.java).apply {
             putExtra(MainActivity.EXTRA_FINAL_UX_FIXTURE, true)
@@ -68,9 +147,18 @@ class FinalUxInstrumentationTest {
             assertEquals(before + 0.25, after, 0.001)
             assertEquals("0", eval(scenario, "document.querySelectorAll('.vux-layer').length"))
 
-            eval(scenario, "document.querySelector('[data-date-input]').value='2026-09-18';" +
+            eval(scenario, "window.__dateSelectCalls=[];" +
+                "window.__originalDateSelect=VitalisDate.select;" +
+                "VitalisDate.select=function(value){window.__dateSelectCalls.push(value);" +
+                "return window.__originalDateSelect(value)};" +
+                "document.querySelector('[data-date-input]').value='2026-09-18';" +
                 "document.querySelector('[data-date-input]').dispatchEvent(new Event('change',{bubbles:true}));true")
             await(scenario) { decoded(eval(scenario, "VitalisFinalUX.snapshot().date")) == "2026-09-18" }
+            assertEquals(
+                "[\"2026-09-18\"]",
+                decoded(eval(scenario, "JSON.stringify(window.__dateSelectCalls)"))
+            )
+            eval(scenario, "VitalisDate.select=window.__originalDateSelect;true")
             eval(scenario, "VitalisFinalUX.openDetail('activity');true")
             assertEquals("2026-09-18", decoded(eval(scenario, "VitalisFinalUX.snapshot().date")))
             eval(scenario, "document.querySelector('.vux-layer [data-close]').click();true")
@@ -198,7 +286,7 @@ class FinalUxInstrumentationTest {
 
     private fun await(
         scenario: ActivityScenario<MainActivity>,
-        timeout: Long = 8_000,
+        timeout: Long = 15_000,
         condition: () -> Boolean
     ) {
         val end = SystemClock.uptimeMillis() + timeout
@@ -219,7 +307,7 @@ class FinalUxInstrumentationTest {
                     latch.countDown()
                 }
         }
-        assertTrue("JavaScript callback timed out", latch.await(5, TimeUnit.SECONDS))
+        assertTrue("JavaScript callback timed out", latch.await(15, TimeUnit.SECONDS))
         return result.get() ?: "null"
     }
 

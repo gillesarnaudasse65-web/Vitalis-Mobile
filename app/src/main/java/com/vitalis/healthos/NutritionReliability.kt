@@ -175,7 +175,7 @@ class NutritionScanCoordinator {
 
     fun markSaved(scanId: String): NutritionScanSession? = updateCurrent(scanId) {
         it.copy(analysisStatus = NutritionScanStatus.SAVED, savedMealId = it.mealId)
-    }
+    }?.also { if (activeScanId == scanId) activeScanId = null }
 
     fun fail(scanId: String, errorCode: String): NutritionScanSession? = update(scanId) {
         it.copy(analysisStatus = NutritionScanStatus.ERROR, errorCode = errorCode.take(80))

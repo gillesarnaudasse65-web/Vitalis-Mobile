@@ -15,6 +15,7 @@ import android.net.Uri
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.provider.Settings
 import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
@@ -27,6 +28,7 @@ import android.webkit.WebChromeClient
 import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
+import android.webkit.RenderProcessGoneDetail
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.webkit.SslErrorHandler
@@ -57,6 +59,7 @@ import androidx.health.connect.client.records.SleepSessionRecord
 import androidx.health.connect.client.records.StepsRecord
 import androidx.health.connect.client.records.WeightRecord
 import androidx.health.connect.client.time.TimeRangeFilter
+import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.webkit.JavaScriptReplyProxy
 import androidx.webkit.WebMessageCompat
@@ -69,6 +72,7 @@ import kotlinx.coroutines.launch
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.BufferedReader
+import java.io.ByteArrayInputStream
 import java.io.File
 import java.io.InputStreamReader
 import java.net.HttpURLConnection
@@ -109,7 +113,14 @@ class MainActivity : ComponentActivity() {
     private val recognitionSessionCoordinator = RecognitionSessionCoordinator()
     private val voiceHandler = Handler(Looper.getMainLooper())
     private var pendingVoiceRetry: Runnable? = null
+    private var pendingVoiceFallbackSessionId: String? = null
+    private var voiceFallbackInProgress = false
+    private var microphonePermissionPreviouslyRequested = false
     private var lastHealthConnectPermissionGranted = false
+    private var lastHealthConnectAllPermissionsGranted = false
+    private var hasResumedOnce = false
+    private var webBackInFlight = false
+    private var renderProcessRecoveryPending = false
     private lateinit var dateState: SelectedDateState
     private var selectedHealthDate: LocalDate
         get() = dateState.selected
@@ -125,6 +136,7 @@ class MainActivity : ComponentActivity() {
     private var observedLocalDeleteGeneration = 0L
     private var observedLocalImportGeneration = 0L
     private lateinit var nutritionImageProcessor: SafeNutritionImageProcessor
+    private lateinit var activeNutritionImageCache: ActiveNutritionImageCache
     private lateinit var nutritionMealStore: NutritionMealStore
     private val nutritionScanCoordinator = NutritionScanCoordinator()
     private val normalizedNutritionImages = mutableMapOf<String, String>()
@@ -214,18 +226,44 @@ class MainActivity : ComponentActivity() {
     ) { granted ->
         val sessionId = recognitionSessionCoordinator.snapshot().sessionId
             ?: return@registerForActivityResult
+        val hadRequestedBefore = microphonePermissionPreviouslyRequested
+        microphonePermissionPreviouslyRequested = true
+        appPreferences.edit { putBoolean(MICROPHONE_PERMISSION_REQUESTED_KEY, true) }
         if (granted) {
             recognitionSessionCoordinator.permissionGranted(sessionId)
             startMicrophoneInternal(sessionId)
         } else {
             microphoneEnabled = false
-            val permanentlyDenied = !shouldShowRequestPermissionRationale(Manifest.permission.RECORD_AUDIO)
+            val permanentlyDenied = hadRequestedBefore &&
+                !shouldShowRequestPermissionRationale(Manifest.permission.RECORD_AUDIO)
             recognitionSessionCoordinator.permissionDenied(sessionId, permanentlyDenied)
             dispatchVoiceEvent(
                 "microphone",
                 if (permanentlyDenied) "permission_permanently_denied" else "permission_denied",
                 false
             )
+        }
+    }
+
+    private val voiceFallbackLauncher = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        voiceFallbackInProgress = false
+        val sessionId = pendingVoiceFallbackSessionId
+        pendingVoiceFallbackSessionId = null
+        if (sessionId == null || !recognitionSessionCoordinator.isCurrent(sessionId)) {
+            return@registerForActivityResult
+        }
+        val matches = if (result.resultCode == Activity.RESULT_OK) {
+            result.data?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS).orEmpty()
+        } else emptyList()
+        val finalText = matches.firstOrNull().orEmpty()
+        if (recognitionSessionCoordinator.consumeFinal(sessionId, finalText)) {
+            dispatchSpeechResults(sessionId, matches, VoiceResultKind.FINAL)
+            finishVoiceSession(sessionId, "idle")
+        } else {
+            dispatchVoiceEvent("microphone", "fallback_cancelled", false)
+            finishVoiceSession(sessionId, "idle")
         }
     }
 
@@ -238,6 +276,7 @@ class MainActivity : ComponentActivity() {
         }
         lastHealthConnectPermissionGranted = granted.intersect(healthPermissions).isNotEmpty()
         val allGranted = granted.containsAll(healthPermissions)
+        lastHealthConnectAllPermissionsGranted = allGranted
         notifyWeb(
             allGranted,
             if (allGranted) "authorized" else "partial",
@@ -276,6 +315,10 @@ class MainActivity : ComponentActivity() {
                 java.time.ZoneId.systemDefault()) } ?: Clock.systemDefaultZone()
         } else Clock.systemDefaultZone()
         appPreferences = getSharedPreferences(APP_PREFS, MODE_PRIVATE)
+        microphonePermissionPreviouslyRequested = appPreferences.getBoolean(
+            MICROPHONE_PERMISSION_REQUESTED_KEY,
+            false
+        )
         secureSecretStore = SecureSecretStore(this)
         localDataStore = VitalisLocalDataStore(this)
         aiConsentCoordinator = AiConsentCoordinator(
@@ -284,6 +327,9 @@ class MainActivity : ComponentActivity() {
         observedLocalDeleteGeneration = localDataStore.localDeleteGeneration()
         observedLocalImportGeneration = localDataStore.appliedImportGeneration()
         nutritionImageProcessor = SafeNutritionImageProcessor(this)
+        activeNutritionImageCache = ActiveNutritionImageCache(
+            File(cacheDir, ACTIVE_NUTRITION_CACHE_DIRECTORY)
+        ).also { it.prune() }
         nutritionMealStore = NutritionMealStore(object : NutritionStringStorage {
             override fun read(): String? = appPreferences.getString(MANUAL_MEALS_KEY, "[]")
             @SuppressLint("UseKtx")
@@ -368,6 +414,17 @@ class MainActivity : ComponentActivity() {
                     request: WebResourceRequest
                 ): WebResourceResponse? {
                     val uri = request.url
+                    if (uri.host == LOCAL_ASSET_HOST &&
+                        uri.path?.startsWith(ACTIVE_SCAN_ASSET_PATH) == true) {
+                        val scanId = uri.lastPathSegment.orEmpty().removeSuffix(".jpg")
+                        val bytes = activeNutritionImageCache.bytes(scanId)
+                        return if (bytes == null) {
+                            WebResourceResponse("text/plain", "UTF-8", 404, "Not Found", emptyMap(),
+                                ByteArrayInputStream(ByteArray(0)))
+                        } else {
+                            WebResourceResponse("image/jpeg", null, ByteArrayInputStream(bytes))
+                        }
+                    }
                     if (NavigationPolicy.isTrusted(uri.toString()) && uri.host == VITALIS_HOST &&
                         uri.path?.startsWith(COACH_ASSET_PATH) == true) {
                         val fileName = uri.lastPathSegment.orEmpty()
@@ -445,6 +502,31 @@ class MainActivity : ComponentActivity() {
                         retryClassicInterfaceOrFallback()
                     }
                 }
+
+                override fun onRenderProcessGone(
+                    view: WebView,
+                    detail: RenderProcessGoneDetail
+                ): Boolean {
+                    if (::webView.isInitialized && view === webView) {
+                        runCatching { root.removeView(view) }
+                        runCatching { view.destroy() }
+                        // WebView destruction can report a renderer loss after the Activity has
+                        // already begun teardown. Recreating from that callback leaves a stale
+                        // Activity alive long enough to overwrite the next screen's persisted
+                        // state. Recover only a live foreground Activity; otherwise defer until
+                        // its legitimate next resume.
+                        if (isFinishing || isDestroyed ||
+                            lifecycle.currentState == Lifecycle.State.DESTROYED) {
+                            return true
+                        }
+                        if (lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) {
+                            recreate()
+                        } else {
+                            renderProcessRecoveryPending = true
+                        }
+                    }
+                    return true
+                }
             }
             // Controlled offline start for the debug instrumentation smoke test only.
             loadUrl(when {
@@ -477,7 +559,32 @@ class MainActivity : ComponentActivity() {
 
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
-                if (webView.canGoBack()) webView.goBack() else finish()
+                if (webBackInFlight) return
+                if (!::webView.isInitialized) {
+                    finish()
+                    return
+                }
+                webBackInFlight = true
+                val currentWebView = webView
+                currentWebView.evaluateJavascript(
+                    """
+                    (function(){
+                      var nodes=document.querySelectorAll(
+                        '.vux-layer,.vitalis-power-overlay-312,.vitalis-source-overlay,.vitalis-deep-overlay,.vitalis-native-overlay'
+                      );
+                      if(!nodes.length)return false;
+                      var top=nodes[nodes.length-1];
+                      var close=top.querySelector('[data-close],.vitalis-native-close,.vitalis-source-close,.vitalis-deep-close');
+                      if(close)close.click();else top.remove();
+                      return true;
+                    })();
+                    """.trimIndent()
+                ) { handled ->
+                    webBackInFlight = false
+                    if (isFinishing || isDestroyed || currentWebView !== webView) return@evaluateJavascript
+                    if (handled == "true") return@evaluateJavascript
+                    if (currentWebView.canGoBack()) currentWebView.goBack() else finish()
+                }
             }
         })
     }
@@ -518,33 +625,120 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun injectClassicCompatibility(view: WebView) {
-        val script = runCatching {
-            val productionLayers = mutableListOf(
-                "vitalis/selected-date.js",
-                "vitalis/compat.js",
-                "vitalis/vitalis-3.12.js"
+        val productionLayers = mutableListOf(
+            "vitalis/selected-date.js",
+            "vitalis/compat.js",
+            "vitalis/vitalis-3.12.js"
+        )
+        val stabilizedFixture = BuildConfig.DEBUG && (
+            intent.getBooleanExtra(EXTRA_RUN2_FIXTURE, false) ||
+                intent.getBooleanExtra(EXTRA_RUN3_FIXTURE, false) ||
+                intent.getBooleanExtra(EXTRA_RUN4_FIXTURE, false) ||
+                intent.getBooleanExtra(EXTRA_RUN5_FIXTURE, false) ||
+                intent.getBooleanExtra(EXTRA_RUN6_FIXTURE, false)
             )
-            val stabilizedFixture = BuildConfig.DEBUG && (
-                intent.getBooleanExtra(EXTRA_RUN2_FIXTURE, false) ||
-                    intent.getBooleanExtra(EXTRA_RUN3_FIXTURE, false) ||
-                    intent.getBooleanExtra(EXTRA_RUN4_FIXTURE, false) ||
-                    intent.getBooleanExtra(EXTRA_RUN5_FIXTURE, false) ||
-                    intent.getBooleanExtra(EXTRA_RUN6_FIXTURE, false)
-                )
-            if (!stabilizedFixture) productionLayers.addAll(listOf(
-                "vitalis/final-ux-core.js",
-                "vitalis/final-ux.js"
-            ))
-            productionLayers
-                .joinToString("\n;\n") { asset ->
-                    assets.open(asset).bufferedReader().use { it.readText() }
-                }
+        if (!stabilizedFixture) productionLayers.addAll(listOf(
+            "vitalis/final-ux-core.js",
+            "vitalis/final-ux.js"
+        ))
+
+        val scripts = mutableListOf(buildNativeProxyBootstrap())
+        val loadedLayers = runCatching {
+            productionLayers.map { asset ->
+                assets.open(asset).bufferedReader().use { it.readText() }
+            }
         }.getOrNull() ?: return
-        view.evaluateJavascript(buildNativeProxyBootstrap() + "\n;\n" + script, null)
+        scripts.addAll(loadedLayers)
+
+        // Keep the deterministic fixture bootstrap byte-for-byte equivalent to the previous
+        // path so upgrade-continuity tests preserve their established storage timing.
+        if (stabilizedFixture) {
+            view.evaluateJavascript(scripts.joinToString("\n;\n"), null)
+            return
+        }
+
+        // Evaluate the bundled production layers one by one. A runtime failure in a legacy/
+        // remote compatibility layer must not prevent the local Final UX dashboard mounting.
+        fun evaluateLayer(index: Int) {
+            if (index >= scripts.size) {
+                if (!stabilizedFixture) verifyFinalUxMounted(view, 0)
+                return
+            }
+            view.evaluateJavascript(scripts[index]) {
+                evaluateLayer(index + 1)
+            }
+        }
+        evaluateLayer(0)
+    }
+
+    private fun verifyFinalUxMounted(view: WebView, attempt: Int) {
+        if (!::webView.isInitialized || view !== webView) return
+        view.evaluateJavascript(
+            """
+                (function(){
+                  return !!window.VitalisAndroid &&
+                    window.__vitalisSelectedDateRun2 === 'ready' &&
+                    window.__vitalisNativeCompatibility === 'ready' &&
+                    window.__vitalisConnectorVoiceControls === 'ready' &&
+                    window.__vitalisPowerLayer312 === 'ready' &&
+                    window.__vitalisFinalUx === 'ready' &&
+                    !!window.VitalisDate &&
+                    !!window.VitalisCoaches &&
+                    !!window.VitalisFinalUX &&
+                    !!document.querySelector('#vitalis-final-ux') &&
+                    !!document.querySelector('[data-widgets]') &&
+                    document.querySelectorAll('[data-widget]').length > 0;
+                })();
+            """.trimIndent()
+        ) { result ->
+            if (result == "true") return@evaluateJavascript
+            if (attempt >= FINAL_UX_RECOVERY_ATTEMPTS) {
+                // A remote page can finish loading while still exposing only an empty shell.
+                // In that case use the bundled local Vitalis UI rather than leaving a blank app.
+                if (requestHost(view.url.orEmpty()) == VITALIS_HOST) loadOfflineFallback()
+                return@evaluateJavascript
+            }
+            Handler(Looper.getMainLooper()).postDelayed({
+                if (!::webView.isInitialized || view !== webView) return@postDelayed
+                val recoveryScripts = runCatching {
+                    listOf(
+                        assets.open("vitalis/selected-date.js").bufferedReader().use { it.readText() },
+                        assets.open("vitalis/compat.js").bufferedReader().use { it.readText() },
+                        assets.open("vitalis/vitalis-3.12.js").bufferedReader().use { it.readText() },
+                        assets.open("vitalis/final-ux-core.js").bufferedReader().use { it.readText() },
+                        assets.open("vitalis/final-ux.js").bufferedReader().use { it.readText() }
+                    )
+                }.getOrNull() ?: return@postDelayed
+                val recovery = """
+                    if (window.__vitalisSelectedDateRun2 !== 'ready') window.__vitalisSelectedDateRun2 = false;
+                    if (window.__vitalisNativeCompatibility !== 'ready' || !window.VitalisNativeActions) window.__vitalisNativeCompatibility = false;
+                    if (window.__vitalisConnectorVoiceControls !== 'ready') window.__vitalisConnectorVoiceControls = false;
+                    if (window.__vitalisDeepDetails !== 'ready') window.__vitalisDeepDetails = false;
+                    if (window.__vitalisSelectedDayAndNutrition !== 'ready') window.__vitalisSelectedDayAndNutrition = false;
+                    if (window.__vitalisRealAiCoach !== 'ready') window.__vitalisRealAiCoach = false;
+                    if (window.__vitalisCoachRefresh311 !== 'ready') window.__vitalisCoachRefresh311 = false;
+                    if (window.__vitalisPowerLayer312 !== 'ready' || !window.VitalisCoaches) window.__vitalisPowerLayer312 = false;
+                    if (window.__vitalisFinalUx !== 'ready' || !document.querySelector('#vitalis-final-ux')) {
+                      window.__vitalisFinalUx = false;
+                      var partialRoot=document.querySelector('#vitalis-final-ux');if(partialRoot)partialRoot.remove();
+                    }
+                """.trimIndent() + "\n;\n" + recoveryScripts.joinToString("\n;\n")
+                view.evaluateJavascript(recovery) {
+                    verifyFinalUxMounted(view, attempt + 1)
+                }
+            }, FINAL_UX_RECOVERY_DELAY_MS)
+        }
     }
 
     override fun onResume() {
         super.onResume()
+        if (renderProcessRecoveryPending) {
+            renderProcessRecoveryPending = false
+            recreate()
+            return
+        }
+        val returningToForeground = hasResumedOnce
+        hasResumedOnce = true
         ensureHealthConnectClient()
         if (::localDataStore.isInitialized) {
             val persistedConsent = appPreferences.getBoolean(AI_HEALTH_CONSENT, false)
@@ -572,8 +766,11 @@ class MainActivity : ComponentActivity() {
                 }
             }
             refreshNativeProxyState()
+            nutritionScanCoordinator.active()?.takeIf {
+                normalizedNutritionImages.containsKey(it.scanId)
+            }?.let(::dispatchNutritionReadiness)
         }
-        if (refreshAfterConnectorReturn && ::webView.isInitialized) {
+        if ((refreshAfterConnectorReturn || returningToForeground) && ::webView.isInitialized) {
             refreshAfterConnectorReturn = false
             Handler(Looper.getMainLooper()).postDelayed(
                 { readHealthData(selectedHealthDate) },
@@ -616,7 +813,9 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onStop() {
-        stopMicrophone("activity_background", cancelled = true)
+        if (!voiceFallbackInProgress) {
+            stopMicrophone("activity_background", cancelled = true)
+        }
         stopSpeaking("activity_background")
         super.onStop()
     }
@@ -630,6 +829,8 @@ class MainActivity : ComponentActivity() {
         filePathCallback?.onReceiveValue(null)
         filePathCallback = null
         stopMicrophone("activity_destroyed", cancelled = true)
+        voiceFallbackInProgress = false
+        pendingVoiceFallbackSessionId = null
         speechRecognizer?.destroy()
         speechRecognizer = null
         stopSpeaking("activity_destroyed")
@@ -740,6 +941,7 @@ class MainActivity : ComponentActivity() {
         "openOfflineMode" -> loadOfflineFallback().let { true }
         "openClassicInterface" -> openClassicInterface().let { true }
         "openHealthConnectSettings" -> openHealthConnectSettings().let { true }
+        "openAppSettings" -> openAppSettings().let { true }
         "openExternalUrl" -> openSafeExternalUrl(args.optString(0)).let { true }
         "openPrivacyDataSettings" -> startActivity(
             Intent(this, PrivacyDataActivity::class.java)
@@ -790,24 +992,55 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun openHealthConnectSettings() {
+        refreshAfterConnectorReturn = true
         try { startActivity(Intent(HealthConnectClient.ACTION_HEALTH_CONNECT_SETTINGS)) }
         catch (_: ActivityNotFoundException) { openHealthConnectStore() }
     }
 
-    private fun nativeProxyState(): JSONObject = JSONObject().apply {
-        put("selectedHealthDate", selectedHealthDate.toString())
-        put("todayHealthDate", dateState.currentToday().toString())
-        put("connectorStatus", buildConnectorPayload(lastSourcePackages))
-        put("lastHealthData", lastHealthPayload)
-        put("healthAiConfigured", secureSecretStore.status(AiKeyKind.HEALTH).configured)
-        put("developerAiConfigured", secureSecretStore.status(AiKeyKind.DEVELOPER).configured)
-        put("aiHealthConsent", hasAiHealthConsentInternal())
-        put("pendingNutritionScan", nutritionScanCoordinator.active()?.let(::nutritionScanSessionJson) ?: JSONObject.NULL)
-        put("localNutrition", localNutritionMealsPayload(null))
-        put("microphoneEnabled", microphoneEnabled)
-        put("speaking", textToSpeech?.isSpeaking == true)
-        put("run5Fixture", if (isRun5Fixture()) buildRun5FixtureResult() else JSONObject())
-        put("run6Fixture", if (isRun6Fixture()) buildRun6FixtureResult() else JSONObject())
+    private fun openAppSettings() {
+        runCatching {
+            startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                data = Uri.fromParts("package", packageName, null)
+            })
+        }
+    }
+
+    private fun nativeProxyState(): JSONObject {
+        val localSnapshot = localDataStore.snapshot()
+        return JSONObject().apply {
+            put("selectedHealthDate", selectedHealthDate.toString())
+            put("todayHealthDate", dateState.currentToday().toString())
+            put("connectorStatus", buildConnectorPayload(lastSourcePackages))
+            put("lastHealthData", lastHealthPayload)
+            put("healthAiConfigured", secureSecretStore.status(AiKeyKind.HEALTH).configured)
+            put("developerAiConfigured", secureSecretStore.status(AiKeyKind.DEVELOPER).configured)
+            put("aiHealthConsent", hasAiHealthConsentInternal())
+            put(
+                "pendingNutritionScan",
+                nutritionScanCoordinator.active()?.let { session ->
+                    nutritionScanSessionJson(session).apply { putNutritionReadiness(session) }
+                } ?: JSONObject.NULL
+            )
+            put("localNutrition", localNutritionMealsPayload(null))
+            put("localState", JSONObject().apply {
+                put("selectedCoach", localSnapshot.selectedCoach ?: JSONObject.NULL)
+                put("dashboardSettings", localSnapshot.dashboardSettings ?: JSONObject.NULL)
+                // Absence means this install predates native Web-state synchronization.
+                // Preserve Web localStorage so sync() can migrate the upgrade journal.
+                put(
+                    "localJournal",
+                    if (localSnapshot.preferences.containsKey(VitalisLocalDataStore.LOCAL_JOURNAL_KEY)) {
+                        localSnapshot.localJournal
+                    } else {
+                        JSONObject.NULL
+                    }
+                )
+            })
+            put("microphoneEnabled", microphoneEnabled)
+            put("speaking", textToSpeech?.isSpeaking == true)
+            put("run5Fixture", if (isRun5Fixture()) buildRun5FixtureResult() else JSONObject())
+            put("run6Fixture", if (isRun6Fixture()) buildRun6FixtureResult() else JSONObject())
+        }
     }
 
     private fun buildNativeProxyBootstrap(): String {
@@ -817,6 +1050,21 @@ class MainActivity : ComponentActivity() {
               var channel=window.$NATIVE_CHANNEL_NAME;
               if(!channel||typeof channel.postMessage!=="function"){window.VitalisAndroid=null;return;}
               var state=$state;
+              var localState=state.localState||{};
+              try{
+                // Web storage is written synchronously while the hardened native mirror is
+                // updated through an asynchronous origin bridge. During an immediate Activity
+                // recreation the mirror can therefore be one event behind. Hydrate only missing
+                // Web values so an older mirror never rolls back the user's latest choice.
+                // Explicit native imports still replace Web state in applyImportedLocalStateToWeb.
+                if(localState.selectedCoach&&localStorage.getItem("vitalis-selected-coach-v312")===null)
+                  localStorage.setItem("vitalis-selected-coach-v312",localState.selectedCoach);
+                if(localState.dashboardSettings&&localStorage.getItem("vitalis-offline-v1")===null)
+                  localStorage.setItem("vitalis-offline-v1",JSON.stringify(localState.dashboardSettings));
+                if(Array.isArray(localState.localJournal)&&localStorage.getItem("vitalis-native-journal-v1")===null)
+                  localStorage.setItem("vitalis-native-journal-v1",JSON.stringify(localState.localJournal));
+                window.__vitalisHydratedNativeLocalState=true;
+              }catch(_){window.__vitalisHydratedNativeLocalState=false;}
               var sequence=0;
               function call(method,args){
                 var id="bridge-"+(++sequence)+"-"+Date.now();
@@ -875,6 +1123,7 @@ class MainActivity : ComponentActivity() {
                 openOfflineMode:function(){call("openOfflineMode",[])},
                 openClassicInterface:function(){call("openClassicInterface",[])},
                 openHealthConnectSettings:function(){call("openHealthConnectSettings",[])},
+                openAppSettings:function(){call("openAppSettings",[])},
                 openExternalUrl:function(v){call("openExternalUrl",[v])},
                 syncWebLocalData:function(v){call("syncWebLocalData",[v]);return true}
               };
@@ -1011,15 +1260,24 @@ class MainActivity : ComponentActivity() {
             microphoneEnabled = false
             recognitionSessionCoordinator.markUnavailable(sessionId)
             dispatchVoiceEvent("microphone", "unavailable", false)
+            launchVoiceFallback(sessionId)
             return
         }
         pendingVoiceRetry?.let(voiceHandler::removeCallbacks)
         pendingVoiceRetry = null
         runCatching { speechRecognizer?.cancel() }
         runCatching { speechRecognizer?.destroy() }
-        speechRecognizer = SpeechRecognizer.createSpeechRecognizer(this).apply {
-            setRecognitionListener(recognitionListener(sessionId))
+        val recognizer = runCatching {
+            SpeechRecognizer.createSpeechRecognizer(this).apply {
+                setRecognitionListener(recognitionListener(sessionId))
+            }
+        }.getOrElse {
+            recognitionSessionCoordinator.handleError(sessionId, RecognitionErrorCategory.START_FAILURE)
+            dispatchVoiceEvent("microphone", "start_failed", false)
+            launchVoiceFallback(sessionId)
+            return
         }
+        speechRecognizer = recognizer
         microphoneEnabled = true
         startRecognitionAttempt(sessionId)
     }
@@ -1049,14 +1307,12 @@ class MainActivity : ComponentActivity() {
         override fun onError(error: Int) {
             if (!recognitionSessionCoordinator.isCurrent(sessionId)) return
             val action = recognitionSessionCoordinator.handleError(sessionId, recognitionErrorCategory(error))
-            dispatchVoiceEvent("microphone", "error_$error", false)
+            dispatchVoiceEvent("microphone", recognitionErrorStatus(error), false)
             when (action) {
                 RecognitionErrorAction.RETRY -> scheduleMicrophoneRetry(sessionId, 700L)
-                RecognitionErrorAction.RETURN_TO_IDLE,
-                RecognitionErrorAction.END_SESSION -> {
-                    microphoneEnabled = false
-                    pendingVoiceRetry = null
-                }
+                RecognitionErrorAction.LAUNCH_FALLBACK -> launchVoiceFallback(sessionId)
+                RecognitionErrorAction.RETURN_TO_IDLE -> finishVoiceSession(sessionId, "idle")
+                RecognitionErrorAction.END_SESSION -> finishVoiceSession(sessionId, "failed")
             }
         }
 
@@ -1065,9 +1321,7 @@ class MainActivity : ComponentActivity() {
             val text = matches.firstOrNull().orEmpty()
             if (!recognitionSessionCoordinator.consumeFinal(sessionId, text)) return
             dispatchSpeechResults(sessionId, matches, VoiceResultKind.FINAL)
-            microphoneEnabled = false
-            recognitionSessionCoordinator.finish(sessionId)
-            dispatchVoiceEvent("microphone", "idle", false)
+            finishVoiceSession(sessionId, "idle")
         }
 
         override fun onPartialResults(partialResults: Bundle?) {
@@ -1090,12 +1344,39 @@ class MainActivity : ComponentActivity() {
             putExtra(RecognizerIntent.EXTRA_LANGUAGE, Locale.getDefault().toLanguageTag())
         }
         runCatching {
-            speechRecognizer?.startListening(intent)
+            requireNotNull(speechRecognizer) { "recognizer_missing" }.startListening(intent)
             dispatchVoiceEvent("microphone", "starting", true)
         }.onFailure {
             microphoneEnabled = false
-            recognitionSessionCoordinator.handleError(sessionId, RecognitionErrorCategory.FATAL)
+            recognitionSessionCoordinator.handleError(sessionId, RecognitionErrorCategory.START_FAILURE)
             dispatchVoiceEvent("microphone", "start_failed", false)
+            launchVoiceFallback(sessionId)
+        }
+    }
+
+    private fun launchVoiceFallback(sessionId: String) {
+        if (!recognitionSessionCoordinator.isCurrent(sessionId)) return
+        pendingVoiceRetry?.let(voiceHandler::removeCallbacks)
+        pendingVoiceRetry = null
+        runCatching { speechRecognizer?.cancel() }
+        runCatching { speechRecognizer?.destroy() }
+        speechRecognizer = null
+        microphoneEnabled = false
+        if (!recognitionSessionCoordinator.markFallback(sessionId)) return
+        val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+            putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 3)
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE, Locale.getDefault().toLanguageTag())
+            putExtra(RecognizerIntent.EXTRA_PROMPT, "Parlez maintenant")
+        }
+        pendingVoiceFallbackSessionId = sessionId
+        voiceFallbackInProgress = true
+        dispatchVoiceEvent("microphone", "fallback_starting", true)
+        runCatching { voiceFallbackLauncher.launch(intent) }.onFailure {
+            voiceFallbackInProgress = false
+            pendingVoiceFallbackSessionId = null
+            dispatchVoiceEvent("microphone", "failed", false)
+            finishVoiceSession(sessionId, "idle")
         }
     }
 
@@ -1122,16 +1403,39 @@ class MainActivity : ComponentActivity() {
         dispatchVoiceEvent("microphone", "idle", false)
     }
 
+    private fun finishVoiceSession(sessionId: String, terminalStatus: String) {
+        pendingVoiceRetry?.let(voiceHandler::removeCallbacks)
+        pendingVoiceRetry = null
+        microphoneEnabled = false
+        runCatching { speechRecognizer?.cancel() }
+        if (terminalStatus != "idle") {
+            dispatchVoiceEvent("microphone", terminalStatus, false)
+        }
+        recognitionSessionCoordinator.finish(sessionId)
+        dispatchVoiceEvent("microphone", "idle", false)
+    }
+
     private fun recognitionErrorCategory(error: Int): RecognitionErrorCategory = when (error) {
         SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS -> RecognitionErrorCategory.PERMISSION
         SpeechRecognizer.ERROR_NO_MATCH,
         SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> RecognitionErrorCategory.NO_SPEECH
         SpeechRecognizer.ERROR_NETWORK,
-        SpeechRecognizer.ERROR_NETWORK_TIMEOUT,
+        SpeechRecognizer.ERROR_NETWORK_TIMEOUT -> RecognitionErrorCategory.NETWORK
         SpeechRecognizer.ERROR_AUDIO -> RecognitionErrorCategory.RECOVERABLE
-        SpeechRecognizer.ERROR_SERVER,
-        SpeechRecognizer.ERROR_RECOGNIZER_BUSY -> RecognitionErrorCategory.SERVICE_UNAVAILABLE
+        SpeechRecognizer.ERROR_RECOGNIZER_BUSY -> RecognitionErrorCategory.MICROPHONE_BUSY
+        SpeechRecognizer.ERROR_SERVER -> RecognitionErrorCategory.SERVICE_UNAVAILABLE
         else -> RecognitionErrorCategory.FATAL
+    }
+
+    private fun recognitionErrorStatus(error: Int): String = when (error) {
+        SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS -> "permission_denied"
+        SpeechRecognizer.ERROR_NO_MATCH,
+        SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> "no_speech"
+        SpeechRecognizer.ERROR_NETWORK,
+        SpeechRecognizer.ERROR_NETWORK_TIMEOUT -> "network_error"
+        SpeechRecognizer.ERROR_RECOGNIZER_BUSY -> "microphone_busy"
+        SpeechRecognizer.ERROR_SERVER -> "unavailable"
+        else -> "failed"
     }
 
     private fun stopSpeaking(reason: String) {
@@ -1161,8 +1465,11 @@ class MainActivity : ComponentActivity() {
         val recognition = recognitionSessionCoordinator.snapshot()
         val speech = ttsSessionCoordinator.snapshot()
         val payload = JSONObject().apply {
+            val presentation = VoiceUserStatusCatalog.forStatus(status)
             put("type", type)
             put("status", status)
+            put("message", presentation.label)
+            put("action", presentation.action ?: JSONObject.NULL)
             put("active", active)
             put("microphoneEnabled", microphoneEnabled)
             put("speaking", textToSpeech?.isSpeaking == true)
@@ -1265,7 +1572,7 @@ class MainActivity : ComponentActivity() {
         responseTransform: (String) -> String = { it },
         responseGuard: () -> Boolean = { true },
         onAccepted: (String) -> Unit = {},
-        onRejected: (String) -> Unit = {}
+        onRejected: (AiRequestFailure) -> Unit = {}
     ): Job {
         val context = if (includeHealthContext) {
             "\n\nDonnées Vitalis disponibles (peuvent être incomplètes) : ${sanitizedHealthContext()}"
@@ -1312,15 +1619,15 @@ class MainActivity : ComponentActivity() {
                 throw cancelled
             } catch (error: Exception) {
                 if (responseGuard()) {
-                    val message = error.message?.take(300)
-                        ?: "Le service IA est momentanément indisponible."
-                    onRejected(message)
+                    val failure = AiRequestFailureClassifier.classify(error)
+                    onRejected(failure)
                     dispatchAiResponse(
                         requestId,
                         false,
                         "",
-                        message,
-                        agentId
+                        failure.userMessage,
+                        agentId,
+                        failure.code
                     )
                 }
             }
@@ -1346,10 +1653,7 @@ class MainActivity : ComponentActivity() {
                 BufferedReader(InputStreamReader(stream, StandardCharsets.UTF_8)).readText()
             }.orEmpty()
             if (status !in 200..299) {
-                val apiMessage = runCatching {
-                    JSONObject(responseText).optJSONObject("error")?.optString("message")
-                }.getOrNull()
-                throw IllegalStateException(apiMessage?.takeIf { it.isNotBlank() } ?: "Erreur OpenAI HTTP $status")
+                throw OpenAiHttpException(status)
             }
             return JSONObject(responseText)
         } finally {
@@ -1371,7 +1675,7 @@ class MainActivity : ComponentActivity() {
         }
         return parts.joinToString("\n").trim()
             .takeIf { it.isNotBlank() }
-            ?: throw IllegalStateException("La réponse IA reçue est vide.")
+            ?: throw InvalidAiResponseException()
     }
 
     private fun dispatchAiResponse(
@@ -1379,13 +1683,15 @@ class MainActivity : ComponentActivity() {
         ok: Boolean,
         text: String,
         error: String?,
-        agentId: String
+        agentId: String,
+        errorCode: String? = null
     ) {
         dispatchWebEvent("vitalis-ai-response", JSONObject().apply {
             put("requestId", requestId)
             put("ok", ok)
             put("text", text)
             put("error", error ?: JSONObject.NULL)
+            put("errorCode", errorCode ?: JSONObject.NULL)
             put("agentId", agentId)
             put("model", if (ok) OPENAI_MODEL else JSONObject.NULL)
         })
@@ -1440,6 +1746,7 @@ class MainActivity : ComponentActivity() {
         invalidateActiveNutritionAnalysis("superseded_by_new_scan")
         supersededScanId?.let { oldScanId ->
             normalizedNutritionImages.remove(oldScanId)
+            activeNutritionImageCache.delete(oldScanId)
             nutritionScanCoordinator.cancel(oldScanId)?.also(::dispatchNutritionScanState)
         }
         val session = nutritionScanCoordinator.begin(scanId, date, source, Instant.now())
@@ -1488,10 +1795,10 @@ class MainActivity : ComponentActivity() {
         }
         lifecycleScope.launch(kotlinx.coroutines.Dispatchers.IO) {
             val result = nutritionImageProcessor.process(uri)
+            handleNutritionImageResult(session.scanId, result)
             pendingNutritionCameraFile?.delete()
             pendingNutritionCameraFile = null
             pendingNutritionCameraUri = null
-            handleNutritionImageResult(session.scanId, result)
         }
     }
 
@@ -1522,6 +1829,16 @@ class MainActivity : ComponentActivity() {
             }
             return
         }
+        if (!activeNutritionImageCache.save(scanId, image.dataUrl)) {
+            nutritionScanCoordinator.fail(scanId, "temporary_photo_store_failed")?.also {
+                persistNutritionSession(it)
+                dispatchNutritionScanState(
+                    it,
+                    "La photo n’a pas pu être conservée pour cette analyse. Réessayez."
+                )
+            }
+            return
+        }
         normalizedNutritionImages[scanId] = image.dataUrl
         val session = nutritionScanCoordinator.markImageReady(scanId, image.metadata) ?: return
         persistNutritionSession(session)
@@ -1529,9 +1846,11 @@ class MainActivity : ComponentActivity() {
         dispatchWebEvent("vitalis-nutrition-image-ready", JSONObject().apply {
             put("scanId", scanId)
             put("selectedDate", session.selectedDate.toString())
-            put("preview", image.dataUrl)
+            put("preview", activeNutritionPreviewUrl(scanId))
             put("metadata", normalizedImageMetadataJson(image.metadata))
+            put("state", NutritionUiState.PHOTO_READY.name)
         })
+        dispatchNutritionReadiness(session)
     }
 
     private fun cancelCurrentNutritionScan(reason: String) {
@@ -1542,6 +1861,7 @@ class MainActivity : ComponentActivity() {
         if (!NutritionIds.valid(scanId)) return
         if (nutritionScanCoordinator.active()?.scanId == scanId) invalidateActiveNutritionAnalysis(reason)
         normalizedNutritionImages.remove(scanId)
+        activeNutritionImageCache.delete(scanId)
         nutritionScanCoordinator.cancel(scanId)?.also {
             persistNutritionSession(it)
             dispatchNutritionScanState(it)
@@ -1561,18 +1881,30 @@ class MainActivity : ComponentActivity() {
             dispatchAiResponse(requestId, false, "", "Photo normalisée indisponible.", "nutrition")
             return
         }
+        val apiKey = readOpenAiKey()
+        if (apiKey == null && !isRun4Fixture()) {
+            dispatchNutritionReadiness(session)
+            dispatchAiResponse(
+                requestId, false, "", "Clé API requise pour analyser cette photo.",
+                "nutrition", "ai_key_required"
+            )
+            return
+        }
         if (!hasAiHealthConsentInternal()) {
-            dispatchAiResponse(requestId, false, "", "Consentement requis avant l’envoi externe.", "nutrition")
+            dispatchNutritionReadiness(session)
+            dispatchAiResponse(
+                requestId, false, "", "Consentement requis avant l’envoi externe.",
+                "nutrition", "ai_consent_required"
+            )
             return
         }
         val consentToken = if (isRun4Fixture()) null else aiConsentCoordinator.begin()
         if (!isRun4Fixture() && consentToken == null) {
-            dispatchAiResponse(requestId, false, "", "Consentement requis avant l’envoi externe.", "nutrition")
-            return
-        }
-        val apiKey = readOpenAiKey()
-        if (apiKey == null && !isRun4Fixture()) {
-            dispatchAiResponse(requestId, false, "", "Clé OpenAI non configurée.", "nutrition")
+            dispatchNutritionReadiness(session)
+            dispatchAiResponse(
+                requestId, false, "", "Consentement requis avant l’envoi externe.",
+                "nutrition", "ai_consent_required"
+            )
             return
         }
         activeNutritionAnalysisJob?.cancel()
@@ -1627,9 +1959,9 @@ class MainActivity : ComponentActivity() {
                 }
             },
             onRejected = {
-                nutritionScanCoordinator.fail(scanId, "analysis_failed")?.also { failed ->
+                nutritionScanCoordinator.fail(scanId, it.code)?.also { failed ->
                     persistNutritionSession(failed)
-                    dispatchNutritionScanState(failed, it)
+                    dispatchNutritionScanState(failed, it.userMessage)
                 }
             }
         )
@@ -1660,6 +1992,9 @@ class MainActivity : ComponentActivity() {
         if (consented) {
             aiConsentCoordinator.grant()
             dispatchWebEvent("vitalis-ai-consent", JSONObject().put("consented", true))
+            nutritionScanCoordinator.active()?.takeIf {
+                normalizedNutritionImages.containsKey(it.scanId)
+            }?.let(::dispatchNutritionReadiness)
         } else revokeAiConsent("consent_revoked")
     }
 
@@ -1714,11 +2049,11 @@ class MainActivity : ComponentActivity() {
         retry.markListening("fixture-retry")
         val firstRetry = retry.handleError(
             "fixture-retry",
-            RecognitionErrorCategory.SERVICE_UNAVAILABLE
+            RecognitionErrorCategory.RECOVERABLE
         )
         val secondRetry = retry.handleError(
             "fixture-retry",
-            RecognitionErrorCategory.SERVICE_UNAVAILABLE
+            RecognitionErrorCategory.RECOVERABLE
         )
 
         val tts = TtsSessionCoordinator().apply { initialized(true) }
@@ -1868,6 +2203,7 @@ class MainActivity : ComponentActivity() {
             dispatchNutritionScanState(it)
         }
         normalizedNutritionImages.remove(scanId)
+        activeNutritionImageCache.delete(scanId)
         readHealthData(selectedHealthDate)
         return nutritionResult(true, null).apply {
             put("meal", NutritionMealCodec.encode(record))
@@ -1934,6 +2270,7 @@ class MainActivity : ComponentActivity() {
             invalidateActiveNutritionAnalysis("local_data_deleted")
             activeScanId?.let { nutritionScanCoordinator.cancel(it) }
             normalizedNutritionImages.clear()
+            activeNutritionImageCache.clear()
             appPreferences.edit { remove(PENDING_NUTRITION_SCAN_KEY) }
             dispatchWebEvent("vitalis-nutrition-local-cleared", JSONObject().put("ok", true))
             readHealthData(selectedHealthDate)
@@ -1953,8 +2290,15 @@ class MainActivity : ComponentActivity() {
         }
 
     private fun persistNutritionSession(session: NutritionScanSession) {
+        if (session.analysisStatus in setOf(
+                NutritionScanStatus.SAVED,
+                NutritionScanStatus.CANCELLED
+            )) {
+            appPreferences.edit { remove(PENDING_NUTRITION_SCAN_KEY) }
+            return
+        }
         val payload = JSONObject().apply {
-            put("schemaVersion", 1)
+            put("schemaVersion", 2)
             put("scanId", session.scanId)
             put("createdAt", session.createdAt.toString())
             put("selectedDate", session.selectedDate.toString())
@@ -1963,6 +2307,12 @@ class MainActivity : ComponentActivity() {
             put("analysisRequestId", session.analysisRequestId ?: JSONObject.NULL)
             put("savedMealId", session.savedMealId ?: JSONObject.NULL)
             put("errorCode", session.errorCode ?: JSONObject.NULL)
+            session.normalizedImageMetadata?.let {
+                put("normalizedImageMetadata", normalizedImageMetadataJson(it))
+            }
+            session.draftResult?.let {
+                put("draftResult", NutritionEstimateParser.estimateJson(it))
+            }
         }
         appPreferences.edit { putString(PENDING_NUTRITION_SCAN_KEY, payload.toString()) }
     }
@@ -1981,11 +2331,25 @@ class MainActivity : ComponentActivity() {
         val persistedStatus = runCatching {
             NutritionScanStatus.valueOf(source.optString("analysisStatus"))
         }.getOrNull() ?: return null
-        val restoredStatus = if (persistedStatus in setOf(
+        val cachedImage = activeNutritionImageCache.load(scanId)
+        if (cachedImage != null) normalizedNutritionImages[scanId] = cachedImage
+        val interrupted = persistedStatus in setOf(
                 NutritionScanStatus.NORMALIZING,
-                NutritionScanStatus.READY_FOR_ANALYSIS,
                 NutritionScanStatus.ANALYZING
-            )) NutritionScanStatus.ERROR else persistedStatus
+            )
+        val needsPhoto = persistedStatus in setOf(
+            NutritionScanStatus.READY_FOR_ANALYSIS,
+            NutritionScanStatus.ANALYZING,
+            NutritionScanStatus.REVIEW,
+            NutritionScanStatus.ERROR
+        )
+        val restoredStatus = if (interrupted || (needsPhoto && cachedImage == null)) {
+            NutritionScanStatus.ERROR
+        } else persistedStatus
+        val metadata = source.optJSONObject("normalizedImageMetadata")?.let(::decodeNormalizedImageMetadata)
+        val draft = source.optJSONObject("draftResult")?.let {
+            NutritionEstimateParser.parseForReview(it.toString()).value
+        }
         return nutritionScanCoordinator.restore(
             NutritionScanSession(
                 scanId = scanId,
@@ -1993,12 +2357,15 @@ class MainActivity : ComponentActivity() {
                 createdAt = createdAt,
                 selectedDate = date,
                 imageSource = imageSource,
+                normalizedImageMetadata = metadata,
                 analysisStatus = restoredStatus,
                 analysisRequestId = source.optString("analysisRequestId")
                     .takeIf { source.has("analysisRequestId") && !source.isNull("analysisRequestId") && it.isNotBlank() },
                 savedMealId = source.optString("savedMealId")
                     .takeIf { source.has("savedMealId") && !source.isNull("savedMealId") && it.isNotBlank() },
-                errorCode = if (restoredStatus == NutritionScanStatus.ERROR) "scan_interrupted"
+                draftResult = draft,
+                errorCode = if (needsPhoto && cachedImage == null) "photo_cache_missing"
+                    else if (interrupted) "scan_interrupted"
                     else source.optString("errorCode")
                         .takeIf { source.has("errorCode") && !source.isNull("errorCode") && it.isNotBlank() }
             )
@@ -2017,13 +2384,59 @@ class MainActivity : ComponentActivity() {
         put("orientationApplied", metadata.orientationApplied)
     }
 
+    private fun decodeNormalizedImageMetadata(source: JSONObject): NormalizedImageMetadata? =
+        runCatching {
+            NormalizedImageMetadata(
+                sourceMimeType = source.getString("sourceMimeType"),
+                sourceBytes = source.getLong("sourceBytes"),
+                sourceWidth = source.getInt("sourceWidth"),
+                sourceHeight = source.getInt("sourceHeight"),
+                normalizedMimeType = source.getString("normalizedMimeType"),
+                normalizedBytes = source.getInt("normalizedBytes"),
+                normalizedWidth = source.getInt("normalizedWidth"),
+                normalizedHeight = source.getInt("normalizedHeight"),
+                orientationApplied = source.getBoolean("orientationApplied")
+            )
+        }.getOrNull()
+
+    private fun activeNutritionPreviewUrl(scanId: String): String =
+        "https://$LOCAL_ASSET_HOST$ACTIVE_SCAN_ASSET_PATH$scanId.jpg"
+
     private fun dispatchNutritionScanState(
         session: NutritionScanSession,
         message: String? = null
     ) {
         dispatchWebEvent(
             "vitalis-nutrition-scan-state",
-            nutritionScanSessionJson(session).apply { put("message", message ?: JSONObject.NULL) }
+            nutritionScanSessionJson(session).apply {
+                put("message", message ?: JSONObject.NULL)
+                putNutritionReadiness(session)
+            }
+        )
+    }
+
+    private fun dispatchNutritionReadiness(session: NutritionScanSession) {
+        dispatchWebEvent(
+            "vitalis-nutrition-analysis-readiness",
+            nutritionScanSessionJson(session).apply { putNutritionReadiness(session) }
+        )
+    }
+
+    private fun JSONObject.putNutritionReadiness(session: NutritionScanSession) {
+        val configured = isRun4Fixture() || secureSecretStore.status(AiKeyKind.HEALTH).configured
+        val consented = hasAiHealthConsentInternal()
+        val hasPhoto = normalizedNutritionImages.containsKey(session.scanId)
+        put("aiConfigured", configured)
+        put("consented", consented)
+        put(
+            "uiState",
+            NutritionUiStateResolver.resolve(
+                hasPhoto,
+                configured,
+                consented,
+                session.analysisStatus,
+                session.errorCode
+            ).name
         )
     }
 
@@ -2037,6 +2450,14 @@ class MainActivity : ComponentActivity() {
         put("savedMealId", session.savedMealId ?: JSONObject.NULL)
         put("errorCode", session.errorCode ?: JSONObject.NULL)
         session.normalizedImageMetadata?.let { put("image", normalizedImageMetadataJson(it)) }
+        if (normalizedNutritionImages.containsKey(session.scanId)) {
+            put("previewUrl", activeNutritionPreviewUrl(session.scanId))
+        }
+        session.draftResult?.let {
+            put("draftResult", NutritionEstimateParser.toReviewJson(
+                NutritionValidationResult(it)
+            ))
+        }
     }
 
     private fun dispatchNutritionOperation(operation: String, ok: Boolean, error: String?) {
@@ -2182,6 +2603,17 @@ class MainActivity : ComponentActivity() {
 
     private fun healthStateJson(state: HealthConnectStateModel) = JSONObject().apply {
         put("code", state.code.name)
+        put("availability", when (state.code) {
+            HealthConnectStateCode.NOT_SUPPORTED,
+            HealthConnectStateCode.PROVIDER_NOT_INSTALLED -> "UNAVAILABLE"
+            HealthConnectStateCode.PROVIDER_UPDATE_REQUIRED -> "PROVIDER_UPDATE_REQUIRED"
+            else -> "AVAILABLE"
+        })
+        put("uiState", HealthConnectUiStateResolver.resolve(state.code).name)
+        put("authorized", state.code in setOf(
+            HealthConnectStateCode.AUTHORIZED_NO_DATA,
+            HealthConnectStateCode.AUTHORIZED_WITH_DATA
+        ))
         put("label", state.label)
         put("reason", state.reason ?: JSONObject.NULL)
         put("retryAction", state.retryAction ?: JSONObject.NULL)
@@ -2454,6 +2886,7 @@ class MainActivity : ComponentActivity() {
                 return@launch
             }
             lastHealthConnectPermissionGranted = granted.intersect(healthPermissions).isNotEmpty()
+            lastHealthConnectAllPermissionsGranted = granted.containsAll(healthPermissions)
             val permissionState = healthPermissionState(granted)
             val hasAnyHealthPermission = granted.intersect(healthPermissions).isNotEmpty()
             if (!hasAnyHealthPermission) {
@@ -2469,18 +2902,6 @@ class MainActivity : ComponentActivity() {
                 val interval = HealthDayIntervals.forDate(selectedDate, zone)
                 val rangeStart = interval.start
                 val rangeEnd = interval.endExclusive
-                val filter = TimeRangeFilter.between(now.minus(Duration.ofDays(30)), now)
-                val steps = if (HealthPermission.getReadPermission(StepsRecord::class) in granted) dataSource.readAll(StepsRecord::class, filter) else emptyList()
-                val sleep = if (HealthPermission.getReadPermission(SleepSessionRecord::class) in granted) dataSource.readAll(SleepSessionRecord::class, filter) else emptyList()
-                val exercise = if (HealthPermission.getReadPermission(ExerciseSessionRecord::class) in granted) dataSource.readAll(ExerciseSessionRecord::class, filter) else emptyList()
-                val heart = if (HealthPermission.getReadPermission(HeartRateRecord::class) in granted) dataSource.readAll(HeartRateRecord::class, filter) else emptyList()
-                val hydration = if (HealthPermission.getReadPermission(HydrationRecord::class) in granted) dataSource.readAll(HydrationRecord::class, filter) else emptyList()
-                val distance = if (HealthPermission.getReadPermission(DistanceRecord::class) in granted) dataSource.readAll(DistanceRecord::class, filter) else emptyList()
-                val activeCalories = if (HealthPermission.getReadPermission(ActiveCaloriesBurnedRecord::class) in granted) dataSource.readAll(ActiveCaloriesBurnedRecord::class, filter) else emptyList()
-                val oxygen = if (HealthPermission.getReadPermission(OxygenSaturationRecord::class) in granted) dataSource.readAll(OxygenSaturationRecord::class, filter) else emptyList()
-                val weight = if (HealthPermission.getReadPermission(WeightRecord::class) in granted) dataSource.readAll(WeightRecord::class, filter) else emptyList()
-                val nutrition = if (HealthPermission.getReadPermission(NutritionRecord::class) in granted) dataSource.readAll(NutritionRecord::class, filter) else emptyList()
-                val recentSources = (steps.map { it.metadata.dataOrigin.packageName } + sleep.map { it.metadata.dataOrigin.packageName } + exercise.map { it.metadata.dataOrigin.packageName } + heart.map { it.metadata.dataOrigin.packageName } + hydration.map { it.metadata.dataOrigin.packageName } + distance.map { it.metadata.dataOrigin.packageName } + activeCalories.map { it.metadata.dataOrigin.packageName } + oxygen.map { it.metadata.dataOrigin.packageName } + weight.map { it.metadata.dataOrigin.packageName } + nutrition.map { it.metadata.dataOrigin.packageName }).filter { it.isNotBlank() }.distinct()
                 val selectedDay = TimeRangeFilter.between(rangeStart, rangeEnd)
                 val stepsDay = if (HealthPermission.getReadPermission(StepsRecord::class) in granted) dataSource.readAll(StepsRecord::class, selectedDay) else emptyList()
                 val sleepDay = if (HealthPermission.getReadPermission(SleepSessionRecord::class) in granted) dataSource.readAll(SleepSessionRecord::class, selectedDay) else emptyList()
@@ -2498,8 +2919,7 @@ class MainActivity : ComponentActivity() {
                     runCatching { Instant.parse(it.optString("recordedAt")) }.getOrNull()
                 }
                 val sources = (
-                    recentSources +
-                        stepsDay.map { it.metadata.dataOrigin.packageName } +
+                    stepsDay.map { it.metadata.dataOrigin.packageName } +
                         sleepDay.map { it.metadata.dataOrigin.packageName } +
                         exerciseDay.map { it.metadata.dataOrigin.packageName } +
                         heartDay.map { it.metadata.dataOrigin.packageName } +
@@ -3021,7 +3441,9 @@ class MainActivity : ComponentActivity() {
             HealthConnectClient.SDK_UNAVAILABLE_PROVIDER_UPDATE_REQUIRED -> "update_required"
             else -> "unavailable"
         }
-        val packages = sourcePackages.filter { it.isNotBlank() }.distinct()
+        val packages = sourcePackages.filter {
+            it.isNotBlank() && it != applicationContext.packageName
+        }.distinct()
         val catalogItems = connectorCatalog.map { definition ->
             val detected = definition.packages.firstOrNull { it in packages }
             val installed = definition.packages.firstOrNull(::isPackageInstalled)
@@ -3031,7 +3453,8 @@ class MainActivity : ComponentActivity() {
                     installed = installed != null,
                     healthConnectAvailable = healthStatus == "available",
                     healthConnectPermissionGranted = lastHealthConnectPermissionGranted,
-                    providerRecordsDetected = detected != null
+                    providerRecordsDetected = detected != null,
+                    healthConnectAllPermissionsGranted = lastHealthConnectAllPermissionsGranted
                 )
             )
             JSONObject().apply {
@@ -3094,6 +3517,7 @@ class MainActivity : ComponentActivity() {
         ConnectorRuntimeState.INSTALLED -> "Application installée"
         ConnectorRuntimeState.SETUP_REQUIRED -> "Configuration requise dans l’application"
         ConnectorRuntimeState.HEALTH_CONNECT_PERMISSION_REQUIRED -> "Autorisation Health Connect requise"
+        ConnectorRuntimeState.HEALTH_CONNECT_PARTIAL_PERMISSION -> "Autorisations Health Connect partielles"
         ConnectorRuntimeState.HEALTH_CONNECT_AVAILABLE_NO_DATA -> "Accès Health Connect activé, aucune donnée fournisseur détectée"
         ConnectorRuntimeState.HEALTH_CONNECT_DATA_AVAILABLE -> "Données fournisseur détectées via Health Connect"
         ConnectorRuntimeState.DIRECT_AUTH_REQUIRED -> "Autorisation directe requise"
@@ -3167,6 +3591,8 @@ class MainActivity : ComponentActivity() {
             "health_connect_permission_requested_v1"
         private const val HEALTH_PERMISSION_EVER_AUTHORIZED_KEY =
             "health_connect_ever_authorized_v1"
+        private const val MICROPHONE_PERMISSION_REQUESTED_KEY =
+            "microphone_permission_requested_v1"
         private const val HEALTH_CONNECT_PACKAGE = "com.google.android.apps.healthdata"
         private const val LOCAL_ASSET_HOST = "appassets.androidplatform.net"
         private const val LOCAL_URL = "https://$LOCAL_ASSET_HOST/assets/vitalis/index.html"
@@ -3184,6 +3610,8 @@ class MainActivity : ComponentActivity() {
         private const val VITALIS_HOST = "vitalis-health-os.gillesarnaudasse65.chatgpt.site"
         private const val VITALIS_URL = "https://$VITALIS_HOST/"
         private const val COACH_ASSET_PATH = "/__vitalis/coaches/"
+        private const val ACTIVE_SCAN_ASSET_PATH = "/active-nutrition-scan/"
+        private const val ACTIVE_NUTRITION_CACHE_DIRECTORY = "nutrition-active"
         private val COACH_ASSET_FILES = setOf(
             "kofi.webp",
             "ama.webp",
@@ -3194,6 +3622,8 @@ class MainActivity : ComponentActivity() {
         )
         private const val REMOTE_LOAD_TIMEOUT_MS = 30_000L
         private const val REMOTE_RETRY_DELAY_MS = 2_000L
+        private const val FINAL_UX_RECOVERY_ATTEMPTS = 3
+        private const val FINAL_UX_RECOVERY_DELAY_MS = 450L
         private const val CONNECTOR_RETURN_REFRESH_DELAY_MS = 700L
         private const val MAX_REMOTE_RETRIES = 2
         private const val MAX_SPEECH_TEXT_LENGTH = 8_000

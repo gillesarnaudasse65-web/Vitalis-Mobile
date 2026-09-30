@@ -1,0 +1,138 @@
+name: Confirm Vitalis Production Signing Backup
+
+on:
+  workflow_dispatch:
+    inputs:
+      backup_a_confirmed:
+        description: Encrypted recovery file is saved in secure Android phone storage
+        required: true
+        default: false
+        type: boolean
+      backup_b_confirmed:
+        description: Independent encrypted copy is saved outside GitHub
+        required: true
+        default: false
+        type: boolean
+      recovery_passphrase_stored:
+        description: Recovery passphrase is stored in the phone password manager
+        required: true
+        default: false
+        type: boolean
+      confirm_activation_review:
+        description: Confirm the backup evidence is ready for production activation review
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+jobs:
+  confirm:
+    name: Re-test durable encrypted backup and record confirmation
+    runs-on: ubuntu-latest
+    environment: production-signing-init
+    timeout-minutes: 15
+    env:
+      VITALIS_VAULT_REPOSITORY: gillesarnaudasse65-web/Vitalis-Signing-Vault
+      VITALIS_VAULT_RECOVERY_PATH: Vitalis-Production-Signing-Recovery.tar.gz.age
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Require every non-secret confirmation
+        if: >-
+          inputs.backup_a_confirmed != true ||
+          inputs.backup_b_confirmed != true ||
+          inputs.recovery_passphrase_stored != true ||
+          inputs.confirm_activation_review != true
+        run: |
+          echo "BACKUP CONFIRMATION INCOMPLETE" >&2
+          exit 1
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Go 1.25
+        uses: actions/setup-go@v6
+        with:
+          go-version: '1.25.0'
+          cache-dependency-path: scripts/vitalis-age/go.mod
+
+      - name: Download and decrypt durable private recovery copy
+        env:
+          VITALIS_SIGNING_BACKUP_PASSPHRASE: ${{ secrets.VITALIS_SIGNING_BACKUP_PASSPHRASE }}
+          VITALIS_SIGNING_VAULT_TOKEN: ${{ secrets.VITALIS_SIGNING_VAULT_TOKEN }}
+        run: |
+          set -euo pipefail
+          test -n "$VITALIS_SIGNING_BACKUP_PASSPHRASE"
+          test -n "$VITALIS_SIGNING_VAULT_TOKEN"
+          umask 077
+
+          curl --fail-with-body --silent --show-error \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer $VITALIS_SIGNING_VAULT_TOKEN" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/$VITALIS_VAULT_REPOSITORY/contents/$VITALIS_VAULT_RECOVERY_PATH" \
+            > "$RUNNER_TEMP/vault-recovery.json"
+          jq -er '.content' "$RUNNER_TEMP/vault-recovery.json" | base64 --decode \
+            > "$RUNNER_TEMP/Vitalis-Production-Signing-Recovery.tar.gz.age"
+
+          (cd scripts/vitalis-age && go run . decrypt \
+            "$RUNNER_TEMP/Vitalis-Production-Signing-Recovery.tar.gz.age" \
+            "$RUNNER_TEMP/recovered.tar.gz")
+          mkdir -p "$RUNNER_TEMP/recovered"
+          tar -xzf "$RUNNER_TEMP/recovered.tar.gz" -C "$RUNNER_TEMP/recovered"
+
+          STORE_PASSWORD=$(jq -er '.keystore_password' "$RUNNER_TEMP/recovered/signing-secrets.json")
+          ALIAS=$(jq -er '.alias' "$RUNNER_TEMP/recovered/signing-secrets.json")
+          KEY_PASSWORD=$(jq -er '.key_password' "$RUNNER_TEMP/recovered/signing-secrets.json")
+          test "$ALIAS" = "vitalis-production"
+          keytool -list -keystore "$RUNNER_TEMP/recovered/vitalis-production.jks" \
+            -storepass "$STORE_PASSWORD" -alias "$ALIAS" >/dev/null
+
+          jar --create --file "$RUNNER_TEMP/confirmation-proof.jar" \
+            -C "$RUNNER_TEMP/recovered" README-RECOVERY.txt
+          jarsigner -keystore "$RUNNER_TEMP/recovered/vitalis-production.jks" \
+            -storepass "$STORE_PASSWORD" -keypass "$KEY_PASSWORD" \
+            "$RUNNER_TEMP/confirmation-proof.jar" "$ALIAS" >/dev/null
+          jarsigner -verify "$RUNNER_TEMP/confirmation-proof.jar" >/dev/null
+
+          cp "$RUNNER_TEMP/recovered/certificate.txt" "$RUNNER_TEMP/certificate-public-metadata.txt"
+
+      - name: Publish backup confirmation evidence
+        run: |
+          {
+            echo "# Vitalis production signing — Phase B backup confirmation"
+            echo
+            echo "BACKUP_CONFIRMED"
+            echo
+            echo "- Backup A: CONFIRMED"
+            echo "- Backup B: CONFIRMED"
+            echo "- Recovery passphrase in password manager: CONFIRMED"
+            echo "- Durable private package decryption: PASS"
+            echo "- Keystore, alias, certificate and signing passwords: PASS"
+            echo "- Production activation still requires public metadata review and production environment secrets."
+            echo
+            cat "$RUNNER_TEMP/certificate-public-metadata.txt"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload public confirmation evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: Vitalis-production-signing-backup-confirmation
+          path: ${{ runner.temp }}/certificate-public-metadata.txt
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Remove temporary signing material
+        if: always()
+        run: |
+          rm -rf "$RUNNER_TEMP/recovered"
+          rm -f \
+            "$RUNNER_TEMP/vault-recovery.json" \
+            "$RUNNER_TEMP/Vitalis-Production-Signing-Recovery.tar.gz.age" \
+            "$RUNNER_TEMP/recovered.tar.gz" \
+            "$RUNNER_TEMP/confirmation-proof.jar"

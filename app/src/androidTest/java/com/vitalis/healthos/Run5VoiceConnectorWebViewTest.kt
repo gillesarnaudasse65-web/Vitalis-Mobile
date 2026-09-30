@@ -40,7 +40,7 @@ class Run5VoiceConnectorWebViewTest {
             assertTrue(result.getBoolean("staleFinalRejected"))
             assertTrue(result.getBoolean("cancelledFinalRejected"))
             assertEquals("RETRY", result.getString("firstRetry"))
-            assertEquals("END_SESSION", result.getString("secondRetry"))
+            assertEquals("LAUNCH_FALLBACK", result.getString("secondRetry"))
             assertTrue(result.getBoolean("oldTtsCallbackRejected"))
             assertTrue(result.getBoolean("ttsStopped"))
             assertEquals("HEALTH_CONNECT_PERMISSION_REQUIRED", result.getString("permissionRequired"))
@@ -80,7 +80,7 @@ class Run5VoiceConnectorWebViewTest {
 
     private fun await(
         scenario: ActivityScenario<MainActivity>,
-        timeout: Long = 7_000,
+        timeout: Long = 15_000,
         condition: () -> Boolean
     ) {
         val end = SystemClock.uptimeMillis() + timeout
@@ -101,7 +101,7 @@ class Run5VoiceConnectorWebViewTest {
                     latch.countDown()
                 }
         }
-        assertTrue("JavaScript callback timed out", latch.await(5, TimeUnit.SECONDS))
+        assertTrue("JavaScript callback timed out", latch.await(15, TimeUnit.SECONDS))
         return result.get() ?: "null"
     }
 

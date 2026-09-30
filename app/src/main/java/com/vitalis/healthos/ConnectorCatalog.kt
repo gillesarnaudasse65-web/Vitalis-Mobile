@@ -14,6 +14,7 @@ internal enum class ConnectorRuntimeState {
     INSTALLED,
     SETUP_REQUIRED,
     HEALTH_CONNECT_PERMISSION_REQUIRED,
+    HEALTH_CONNECT_PARTIAL_PERMISSION,
     HEALTH_CONNECT_AVAILABLE_NO_DATA,
     HEALTH_CONNECT_DATA_AVAILABLE,
     DIRECT_AUTH_REQUIRED,
@@ -37,7 +38,8 @@ internal data class ConnectorEvidence(
     val installed: Boolean,
     val healthConnectAvailable: Boolean,
     val healthConnectPermissionGranted: Boolean,
-    val providerRecordsDetected: Boolean
+    val providerRecordsDetected: Boolean,
+    val healthConnectAllPermissionsGranted: Boolean = healthConnectPermissionGranted
 )
 
 internal object ConnectorStateResolver {
@@ -52,6 +54,8 @@ internal object ConnectorStateResolver {
             !evidence.healthConnectAvailable -> ConnectorRuntimeState.UNAVAILABLE
             !evidence.healthConnectPermissionGranted ->
                 ConnectorRuntimeState.HEALTH_CONNECT_PERMISSION_REQUIRED
+            !evidence.healthConnectAllPermissionsGranted ->
+                ConnectorRuntimeState.HEALTH_CONNECT_PARTIAL_PERMISSION
             definition.id != "health_connect" && !evidence.installed ->
                 ConnectorRuntimeState.NOT_INSTALLED
             else -> ConnectorRuntimeState.HEALTH_CONNECT_AVAILABLE_NO_DATA

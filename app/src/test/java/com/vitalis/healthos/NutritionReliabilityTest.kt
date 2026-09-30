@@ -4,6 +4,8 @@ import java.time.Clock
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneOffset
+import java.io.IOException
+import java.net.SocketTimeoutException
 import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.Assert.*
@@ -99,6 +101,64 @@ class NutritionReliabilityTest {
         assertNull(coordinator.acceptAnalysis(a.scanId, "request-a", estimate()))
         assertEquals(LocalDate.parse("2026-09-18"), coordinator.session(a.scanId)!!.selectedDate)
         assertEquals(LocalDate.parse("2026-09-19"), b.selectedDate)
+    }
+
+    @Test fun photoReadinessUsesTrustedKeyAndConsentStates() {
+        assertEquals(
+            NutritionUiState.AI_KEY_REQUIRED,
+            NutritionUiStateResolver.resolve(true, false, false, NutritionScanStatus.READY_FOR_ANALYSIS)
+        )
+        assertEquals(
+            NutritionUiState.AI_CONSENT_REQUIRED,
+            NutritionUiStateResolver.resolve(true, true, false, NutritionScanStatus.READY_FOR_ANALYSIS)
+        )
+        assertEquals(
+            NutritionUiState.READY_FOR_ANALYSIS,
+            NutritionUiStateResolver.resolve(true, true, true, NutritionScanStatus.READY_FOR_ANALYSIS)
+        )
+        assertEquals(
+            NutritionUiState.ANALYZING,
+            NutritionUiStateResolver.resolve(true, true, true, NutritionScanStatus.ANALYZING)
+        )
+        assertEquals(
+            NutritionUiState.ANALYSIS_SUCCESS,
+            NutritionUiStateResolver.resolve(true, true, true, NutritionScanStatus.REVIEW)
+        )
+    }
+
+    @Test fun apiFailuresAreClassifiedWithoutLeakingProviderDetails() {
+        val failures = listOf(
+            OpenAiHttpException(401) to "api_auth_error",
+            OpenAiHttpException(429) to "api_quota_error",
+            OpenAiHttpException(503) to "service_unavailable",
+            IOException("secret transport detail") to "network_error",
+            SocketTimeoutException("socket detail") to "timeout",
+            InvalidAiResponseException() to "invalid_response"
+        )
+        failures.forEach { (error, expectedCode) ->
+            val failure = AiRequestFailureClassifier.classify(error)
+            assertEquals(expectedCode, failure.code)
+            assertFalse(failure.userMessage.contains("secret transport detail"))
+            assertFalse(failure.userMessage.contains("socket detail"))
+        }
+    }
+
+    @Test fun analysisRetryKeepsSamePhotoSessionAndSelectedDate() {
+        val coordinator = NutritionScanCoordinator()
+        coordinator.begin(
+            "scan-retry",
+            LocalDate.parse("2026-09-18"),
+            NutritionImageSource.CAMERA,
+            now
+        )
+        coordinator.markImageReady("scan-retry", metadata())
+        coordinator.startAnalysis("scan-retry", "request-first")
+        coordinator.fail("scan-retry", "network_error")
+        val retry = coordinator.startAnalysis("scan-retry", "request-second")
+        assertNotNull(retry)
+        assertEquals(LocalDate.parse("2026-09-18"), retry!!.selectedDate)
+        assertEquals(metadata(), retry.normalizedImageMetadata)
+        assertNotNull(coordinator.acceptAnalysis("scan-retry", "request-second", estimate()))
     }
 
     @Test fun cancelledRequestCannotAcceptLateResult() {

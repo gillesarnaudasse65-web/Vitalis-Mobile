@@ -87,22 +87,53 @@ class VoiceReliabilityTest {
             coordinator.handleError("voice-1", RecognitionErrorCategory.RECOVERABLE)
         )
         assertEquals(
-            RecognitionErrorAction.END_SESSION,
+            RecognitionErrorAction.LAUNCH_FALLBACK,
             coordinator.handleError("voice-1", RecognitionErrorCategory.RECOVERABLE)
         )
         assertEquals(1, coordinator.snapshot().retryCount)
     }
 
-    @Test fun serviceFailureUsesSameBoundedRetryBudget() {
+    @Test fun unavailableServiceLaunchesControlledFallback() {
         val coordinator = listeningCoordinator()
         assertEquals(
-            RecognitionErrorAction.RETRY,
+            RecognitionErrorAction.LAUNCH_FALLBACK,
             coordinator.handleError("voice-1", RecognitionErrorCategory.SERVICE_UNAVAILABLE)
         )
+        assertEquals(RecognitionState.FALLBACK, coordinator.snapshot().state)
+    }
+
+    @Test fun busyServerAndNetworkUseOneRetryThenFallback() {
+        listOf(
+            RecognitionErrorCategory.RECOVERABLE,
+            RecognitionErrorCategory.NETWORK,
+            RecognitionErrorCategory.MICROPHONE_BUSY
+        ).forEach { category ->
+            val coordinator = listeningCoordinator()
+            assertEquals(RecognitionErrorAction.RETRY, coordinator.handleError("voice-1", category))
+            assertEquals(
+                RecognitionErrorAction.LAUNCH_FALLBACK,
+                coordinator.handleError("voice-1", category)
+            )
+        }
+    }
+
+    @Test fun startFailureLaunchesFallbackAndFallbackFinalIsExactlyOnce() {
+        val coordinator = listeningCoordinator()
         assertEquals(
-            RecognitionErrorAction.END_SESSION,
-            coordinator.handleError("voice-1", RecognitionErrorCategory.SERVICE_UNAVAILABLE)
+            RecognitionErrorAction.LAUNCH_FALLBACK,
+            coordinator.handleError("voice-1", RecognitionErrorCategory.START_FAILURE)
         )
+        assertTrue(coordinator.consumeFinal("voice-1", "résultat de secours"))
+        assertFalse(coordinator.consumeFinal("voice-1", "résultat dupliqué"))
+    }
+
+    @Test fun cancelledFallbackReturnsReadyWithoutAResult() {
+        val coordinator = listeningCoordinator()
+        assertTrue(coordinator.markFallback("voice-1"))
+        assertFalse(coordinator.consumeFinal("voice-1", ""))
+        assertTrue(coordinator.finish("voice-1"))
+        assertEquals(RecognitionState.IDLE, coordinator.snapshot().state)
+        assertNull(coordinator.snapshot().sessionId)
     }
 
     @Test fun noSpeechReturnsToIdleWithoutRetry() {
@@ -122,6 +153,29 @@ class VoiceReliabilityTest {
             coordinator.handleError("voice-1", RecognitionErrorCategory.PERMISSION)
         )
         assertEquals(0, coordinator.snapshot().retryCount)
+    }
+
+    @Test fun everyRequiredPhysicalStatusHasActionableCopy() {
+        val expected = mapOf(
+            "requesting_permission" to "Permission required",
+            "starting" to "Starting microphone",
+            "listening" to "Listening",
+            "processing_final" to "Processing",
+            "no_speech" to "No speech detected",
+            "unavailable" to "Recognition service unavailable",
+            "network_error" to "Network recognition error",
+            "microphone_busy" to "Microphone busy",
+            "permission_denied" to "Permission denied",
+            "failed" to "Recognition failed",
+            "idle" to "Ready"
+        )
+        expected.forEach { (status, label) ->
+            assertEquals(label, VoiceUserStatusCatalog.forStatus(status).label)
+        }
+        assertEquals(
+            "open_app_settings",
+            VoiceUserStatusCatalog.forStatus("permission_permanently_denied").action
+        )
     }
 
     @Test fun finishClearsSessionIdentity() {

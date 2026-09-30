@@ -24,8 +24,8 @@ android {
         applicationId = "com.vitalis.healthos"
         minSdk = 28
         targetSdk = 35
-        versionCode = 20
-        versionName = "3.15.0-security-release"
+        versionCode = 21
+        versionName = "3.15.0-rc1"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 

@@ -1,0 +1,108 @@
+# Vitalis 3.15.0-rc1 validation
+
+Candidate branch: `agent/vitalis-3.15-rc-validation`  
+Base/PR #12 merge: `188a31e2ff34ef102cdcfa861f8de69972bee88e`  
+Application: `com.vitalis.healthos`, `3.15.0-rc1` (`21`)
+
+## Validation status
+
+This document separates automated evidence from mandatory external acceptance. Emulator success must not be interpreted as physical-device or production-signing success.
+
+| Area | Automated baseline | RC/physical status |
+|---|---|---|
+| Source/JavaScript | 76/76 on run 113 | PASS |
+| JVM | 100/100 on run 113 | PASS |
+| Instrumentation | 10/10 on API 35 emulator | Physical device NOT TESTED |
+| Upgrade | 2/2 synthetic debug-signature executions | Production-signature upgrade BLOCKED |
+| Lint | 0 errors / 54 unchanged warnings | PASS |
+| Release package | Minified QA APK/AAB/R8/signatures/checksums | PASS — test-signed only |
+
+## Production signing
+
+The build accepts a keystore path, store password, alias, and key password only through the release environment. No credential is committed. The last verified Final UX workflow produced a `test-signed` artifact, so availability and continuity of a stable production identity are not established.
+
+**BLOCKED — PRODUCTION SIGNING IDENTITY REQUIRED**
+
+A test-signed RC may be used for QA but is **NOT FOR PRODUCTION DISTRIBUTION**. When credentials are provisioned, retain the APK certificate SHA-256, safe certificate subject/validity, `apksigner` result, AAB signature result, checksums, and sizes without exposing private material.
+
+## Physical-device acceptance matrix
+
+Record manufacturer/model/Android/screen/RAM, but never serial number or IMEI. All rows remain `NOT TESTED` until executed on a real phone.
+
+| Area | Required scenarios | Result / evidence |
+|---|---|---|
+| Install/lifecycle | clean install, launch, restart, Back, process death | NOT TESTED |
+| Themes | Classic, Ocean, Dark, AMOLED, Aurora, System; bars, persistence | NOT TESTED |
+| Widgets | 12 card taps, nested actions, feedback, no double navigation | NOT TESTED |
+| Customization | long press, drag/drop/scroll, hide/show, accessible reorder, presets, restore, restart | NOT TESTED |
+| Health Connect | available, grant, partial/full/revoke, no-data/data, date, refresh, resume | NOT TESTED |
+| Providers | installed detection, launch/return, status refresh | NOT TESTED |
+| Nutrition | picker/camera/cancels, rotation/large image, review/edit/save/idempotency/delete/date | NOT TESTED |
+| Voice/TTS | permission, partial/final/stop, duplicate prevention, lifecycle, French/fallback | NOT TESTED |
+| Native key | FLAG_SECURE, hidden entry, save/replace/delete, no WebView plaintext | NOT TESTED |
+| Privacy/data | consent revoke/late result, export/import/merge/delete boundaries | NOT TESTED |
+| Offline/network | cold offline, labels/local state, reconnect, timeout/retry/stale response | NOT TESTED |
+| Scaling/accessibility | font/display scales, orientation, TalkBack labels, non-drag alternatives | NOT TESTED |
+| Performance | cold start, dashboard, scroll, theme, details, drag/drop, scanner | NOT TESTED |
+| Crash/battery sanity | logcat/ANR review, no residual microphone/poll/wakelock | NOT TESTED |
+
+## Upgrade protocol
+
+1. Obtain the previously distributed production-signed APK and identify its certificate SHA-256.
+2. Install it without removing application data.
+3. Seed only synthetic/local test values: selected date/coach, meal, theme/accent, widget layout, AI consent, journal, and preset.
+4. Install the production-signed RC with `adb install -r`.
+5. Reject the candidate on signature mismatch, forced uninstall, startup failure, or data loss.
+6. Confirm every seeded item remains correct and exportable.
+
+If no production-signed Vitalis has ever been distributed, document `3.15.0` as the first stable signing identity and retain it for all future updates.
+
+## Privacy and Google Play
+
+The implementation-facing privacy draft covers Health Connect, requested AI processing, meal images, Android voice recognition/TTS, local storage, encrypted API keys, provider boundaries, export/import, and deletion boundaries. It remains marked **DRAFT — REQUIRES LEGAL REVIEW BEFORE PUBLIC RELEASE**.
+
+Google Play preparation is tracked in `VITALIS_GOOGLE_PLAY_CHECKLIST.md`; no publication or legal compliance is claimed.
+
+## Release-blocker classification
+
+| Issue | Severity | Blocking | Required action |
+|---|---|---:|---|
+| Stable production signing identity not established | P0 | Yes | Provision protected CI credentials and verify certificate continuity |
+| Mandatory physical-device acceptance not executed | P1 | Yes | Execute and retain the matrix above on at least one real Android phone |
+| Production-signed upgrade continuity not executed | P1 | Yes | Test previous production build to RC using `adb install -r` |
+| Qualified legal review pending | External gate | Yes for publication | Review and publish the final privacy policy |
+| Final Play declarations/support/listing approval pending | External gate | Yes for publication | Complete Play Console preparation |
+
+## Current decision
+
+**RC FAIL** until the P0/P1 external release gates above are completed. This status does not imply an observed software regression; it applies the mandatory decision rule without inventing signing or physical-device evidence.
+
+## Physical hotfix continuation — 2026-09-28
+
+A real-phone QA run installed and launched the RC and successfully returned a camera capture, but voice recognition produced no usable result and the meal photo was not analyzed. Those two observed failures are not overwritten by the earlier automated baseline. A scoped reliability hotfix now adds a session-owned Android recognition fallback, visible/actionable voice states, native-trusted AI-key and consent readiness, same-photo resume, precise API failure classification, and retry without recapture. See `VITALIS_PHYSICAL_HOTFIX_REPORT.md`.
+
+The hotfix required fresh GitHub Actions evidence and still requires a new phone retest. Until both flows pass on the phone, the physical result and RC decision remain **FAIL**.
+
+GitHub Actions run 106 completed successfully at hotfix commit `de3a05b63cd8b29f30dd267cb9ceca8fef8dc2f5`: 65/65 source contracts, 91/91 JVM tests, 10/10 instrumentation tests, 2/2 synthetic upgrade executions, lint with 0 errors and 54 unchanged warnings, and minified QA APK/AAB generation. The phone retest remains mandatory; automated success does not change the RC decision.
+
+## RC blocker-clearance continuation
+
+Previous RC decision: **RC FAIL**.
+
+New decision: **RC FAIL**.
+
+The owner confirmed this will be Vitalis's first production signing lineage and that a physical Android device is available. CI now separates QA test signing from a protected, manual, fail-closed production-signing job. The decision has not changed because the permanent key has not yet been created through a recoverable secret-storage route, backup is not confirmed, physical acceptance has not been executed, and the same-certificate versionCode 20 → 21 upgrade remains untested. See `VITALIS_RC_BLOCKER_CLEARANCE.md`.
+
+## Phone-only signing architecture continuation — 2026-09-28
+
+The release infrastructure now defines an executable two-phase phone-only path based on a standard encrypted age recovery package, a dedicated private GitHub signing-vault repository, an Android Backup A, an independent Backup B, and a separate confirmation workflow. Production and baseline jobs restore the same package and compare its certificate fingerprint with `VITALIS_SIGNING_IDENTITY.md` before building.
+
+This is infrastructure readiness only. No permanent identity, backup confirmation, production APK/AAB, production-signed baseline, physical upgrade, or physical acceptance result exists until the protected workflows and phone steps actually succeed. The decision therefore remains **RC FAIL**.
+
+## Deep stability audit continuation — 2026-09-30
+
+Real-phone reports of disappearing photos/coach portraits, unreliable connector state, incomplete resume/reload UI, voice failure, and meal-analysis failure were treated as systemic lifecycle evidence. Reliability commit `2bb9c9326c73e00bd1feaada7332daf16be54e97` adds bundled-first portrait routing and fallback, native-before-Web local-state hydration, a private expiring active-scan image cache, truthful selected-day Health Connect/connector evidence, foreground refresh, initialization state guards, startup readiness recovery, and WebView renderer recovery. No product surface was added or removed.
+
+GitHub Actions run 112 caught a real upgrade regression: an absent native journal field was treated as an explicit empty journal and overwrote legacy Web data. The migration semantics were corrected and no assertion was relaxed. GitHub Actions run 113 then passed 76/76 source contracts, 100/100 JVM tests, 10/10 instrumentation tests, and 2/2 synthetic upgrades (188/188 total); lint remained at 0 errors / 54 unchanged warnings, and the minified QA APK/AAB/R8/signature/checksum jobs passed.
+
+The resulting test-signed artifact is `Vitalis-3.15.0-rc1-deep-stability-qa`; see `VITALIS_DEEP_STABILITY_REPORT.md` for its hashes and phone matrix. Previous phone failures remain recorded and a complete phone retest is mandatory; **RC FAIL** remains unchanged.

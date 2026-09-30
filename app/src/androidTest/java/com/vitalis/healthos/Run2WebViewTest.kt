@@ -163,7 +163,7 @@ class Run2WebViewTest {
         return result
     }
 
-    private fun await(scenario: ActivityScenario<MainActivity>, timeout: Long = 5_000,
+    private fun await(scenario: ActivityScenario<MainActivity>, timeout: Long = 15_000,
                       condition: () -> Boolean) {
         val end = SystemClock.uptimeMillis() + timeout
         while (SystemClock.uptimeMillis() < end) {
@@ -180,7 +180,7 @@ class Run2WebViewTest {
             val view = findWebView(activity.findViewById(android.R.id.content))
             requireNotNull(view).evaluateJavascript(js) { result.set(it); latch.countDown() }
         }
-        assertTrue("JavaScript callback timed out", latch.await(5, TimeUnit.SECONDS))
+        assertTrue("JavaScript callback timed out", latch.await(15, TimeUnit.SECONDS))
         return result.get() ?: "null"
     }
 

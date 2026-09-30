@@ -24,6 +24,33 @@ enum class HealthConnectStateCode {
     SYNC_ERROR
 }
 
+enum class HealthConnectUiState {
+    AVAILABLE,
+    PERMISSION_REQUIRED,
+    PARTIAL_PERMISSION,
+    AUTHORIZED,
+    NO_DATA,
+    DATA_AVAILABLE,
+    PROVIDER_UPDATE_REQUIRED,
+    UNAVAILABLE,
+    ERROR
+}
+
+object HealthConnectUiStateResolver {
+    fun resolve(code: HealthConnectStateCode): HealthConnectUiState = when (code) {
+        HealthConnectStateCode.NOT_SUPPORTED,
+        HealthConnectStateCode.PROVIDER_NOT_INSTALLED -> HealthConnectUiState.UNAVAILABLE
+        HealthConnectStateCode.PROVIDER_UPDATE_REQUIRED ->
+            HealthConnectUiState.PROVIDER_UPDATE_REQUIRED
+        HealthConnectStateCode.PERMISSION_NOT_REQUESTED,
+        HealthConnectStateCode.PERMISSION_DENIED -> HealthConnectUiState.PERMISSION_REQUIRED
+        HealthConnectStateCode.PARTIAL_PERMISSION -> HealthConnectUiState.PARTIAL_PERMISSION
+        HealthConnectStateCode.AUTHORIZED_NO_DATA -> HealthConnectUiState.NO_DATA
+        HealthConnectStateCode.AUTHORIZED_WITH_DATA -> HealthConnectUiState.DATA_AVAILABLE
+        HealthConnectStateCode.SYNC_ERROR -> HealthConnectUiState.ERROR
+    }
+}
+
 data class HealthConnectStateModel(
     val code: HealthConnectStateCode,
     val label: String,
