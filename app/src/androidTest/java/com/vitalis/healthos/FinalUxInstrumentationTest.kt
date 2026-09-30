@@ -280,6 +280,12 @@ class FinalUxInstrumentationTest {
 
     private fun decoded(encoded: String): String = JSONArray("[$encoded]").getString(0)
 
+    private fun recorded(scenario: ActivityScenario<MainActivity>): List<String> {
+        var result = emptyList<String>()
+        scenario.onActivity { result = it.debugRecordedDates() }
+        return result
+    }
+
     private fun await(
         scenario: ActivityScenario<MainActivity>,
         timeout: Long = 15_000,
