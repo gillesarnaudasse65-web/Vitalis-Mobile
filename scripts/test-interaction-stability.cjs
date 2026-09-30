@@ -14,7 +14,12 @@ const coachIds = ['general', 'nutrition', 'activity', 'sleep', 'recovery', 'ment
 
 test('legacy capture routers cannot steal Final UX controls', () => {
   const finalUxExclusions = compat.match(/target\.closest\("#vitalis-final-ux/g) || [];
-  assert.ok(finalUxExclusions.length >= 2, 'both legacy capture routers exclude Final UX');
+  assert.ok(finalUxExclusions.length >= 3, 'all legacy capture routers exclude Final UX');
+  assert.match(
+    compat,
+    /function contextText[\s\S]*?document\.addEventListener\("click", function \(event\) \{[\s\S]*?target\.closest\("#vitalis-final-ux"\)\) return;/,
+    'the deep-details capture router must ignore Final UX controls'
+  );
   assert.match(power, /target\.closest\("#vitalis-final-ux"\)/);
   assert.match(power, /target\.closest\("\.vitalis-power-overlay-312"\)/);
 });

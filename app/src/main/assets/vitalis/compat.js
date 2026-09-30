@@ -667,6 +667,9 @@
   document.addEventListener("click", function (event) {
     var target = event.target;
     if (!target || !target.closest) return;
+    // The Final UX owns these controls. Inferring a legacy health category
+    // from their labels can steal taps (for example Sékou = recovery).
+    if (target.closest("#vitalis-final-ux")) return;
     if (target.closest(".vitalis-deep-overlay,.vitalis-native-overlay")) return;
     var direct = norm(target.innerText || target.textContent || target.getAttribute && target.getAttribute("aria-label"));
     if (direct === "+" || /ajouter|enregistrer|scanner/.test(direct)) return;
