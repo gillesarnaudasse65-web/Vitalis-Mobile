@@ -1,6 +1,6 @@
 (function () {
-  if (window.__vitalisNativeCompatibility) return;
-  window.__vitalisNativeCompatibility = true;
+  if (window.__vitalisNativeCompatibility === "ready" || window.__vitalisNativeCompatibility === "initializing") return;
+  window.__vitalisNativeCompatibility = "initializing";
 
   var STORE_KEY = "vitalis-native-journal-v1";
   var nativeBridge = window.VitalisAndroid || null;
@@ -298,11 +298,12 @@
       nativeBridge.openOfflineMode();
     }
   }, 1400);
+  window.__vitalisNativeCompatibility = "ready";
 })();
 
 (function () {
-  if (window.__vitalisConnectorVoiceControls) return;
-  window.__vitalisConnectorVoiceControls = true;
+  if (window.__vitalisConnectorVoiceControls === "ready" || window.__vitalisConnectorVoiceControls === "initializing") return;
+  window.__vitalisConnectorVoiceControls = "initializing";
 
   var bridge = window.VitalisAndroid || null;
   var lastData = {};
@@ -487,11 +488,12 @@
   };
 
   createControls();
+  window.__vitalisConnectorVoiceControls = "ready";
 })();
 
 (function () {
-  if (window.__vitalisDeepDetails) return;
-  window.__vitalisDeepDetails = true;
+  if (window.__vitalisDeepDetails === "ready" || window.__vitalisDeepDetails === "initializing") return;
+  window.__vitalisDeepDetails = "initializing";
 
   var bridge = window.VitalisAndroid || null;
   var healthData = {};
@@ -695,11 +697,12 @@
     open: showCategory,
     refresh: function () { if (window.VitalisDate) window.VitalisDate.refresh(); }
   };
+  window.__vitalisDeepDetails = "ready";
 })();
 
 (function () {
-  if (window.__vitalisSelectedDayAndNutrition) return;
-  window.__vitalisSelectedDayAndNutrition = true;
+  if (window.__vitalisSelectedDayAndNutrition === "ready" || window.__vitalisSelectedDayAndNutrition === "initializing") return;
+  window.__vitalisSelectedDayAndNutrition = "initializing";
 
   var bridge = window.VitalisAndroid || null;
   var currentData = {};
@@ -843,11 +846,12 @@
     lastRequestedDate = selectedDateIso();
     enhanceClassicInterface();
   }, 650);
+  window.__vitalisSelectedDayAndNutrition = "ready";
 })();
 
 (function () {
-  if (window.__vitalisRealAiCoach) return;
-  window.__vitalisRealAiCoach = true;
+  if (window.__vitalisRealAiCoach === "ready" || window.__vitalisRealAiCoach === "initializing") return;
+  window.__vitalisRealAiCoach = "initializing";
 
   var bridge = window.VitalisAndroid || null;
   var pending = {};
@@ -1191,13 +1195,14 @@
       if (bridge && bridge.openKeySettings) bridge.openKeySettings("health");
     }
   };
+  window.__vitalisRealAiCoach = "ready";
 })();
 
 
 /* Vitalis 3.11 — catalogue complet des coachs et actualisation visible */
 (function () {
-  if (window.__vitalisCoachRefresh311) return;
-  window.__vitalisCoachRefresh311 = true;
+  if (window.__vitalisCoachRefresh311 === "ready" || window.__vitalisCoachRefresh311 === "initializing") return;
+  window.__vitalisCoachRefresh311 = "initializing";
 
   var bridge = window.VitalisAndroid || null;
   var coaches = [
@@ -1340,7 +1345,7 @@
     var label = norm((target.innerText || "") + " " + (target.getAttribute("aria-label") || ""));
     if (/tous.*coach|mes.*coach|voir.*coach|equipe.*coach/.test(label)) {
       event.preventDefault(); event.stopImmediatePropagation();
-      if (window.__vitalisPowerLayer312 && window.VitalisCoaches && window.VitalisCoaches.open) {
+      if (window.__vitalisPowerLayer312 === "ready" && window.VitalisCoaches && window.VitalisCoaches.open) {
         window.VitalisCoaches.open();
       } else {
         showCoaches();
@@ -1352,4 +1357,5 @@
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", installButtons);
   else installButtons();
   new MutationObserver(installButtons).observe(document.documentElement, { childList: true, subtree: true });
+  window.__vitalisCoachRefresh311 = "ready";
 })();

@@ -28,6 +28,7 @@ import android.webkit.WebChromeClient
 import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
+import android.webkit.RenderProcessGoneDetail
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.webkit.SslErrorHandler
@@ -70,6 +71,7 @@ import kotlinx.coroutines.launch
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.BufferedReader
+import java.io.ByteArrayInputStream
 import java.io.File
 import java.io.InputStreamReader
 import java.net.HttpURLConnection
@@ -114,6 +116,8 @@ class MainActivity : ComponentActivity() {
     private var voiceFallbackInProgress = false
     private var microphonePermissionPreviouslyRequested = false
     private var lastHealthConnectPermissionGranted = false
+    private var lastHealthConnectAllPermissionsGranted = false
+    private var hasResumedOnce = false
     private lateinit var dateState: SelectedDateState
     private var selectedHealthDate: LocalDate
         get() = dateState.selected
@@ -129,6 +133,7 @@ class MainActivity : ComponentActivity() {
     private var observedLocalDeleteGeneration = 0L
     private var observedLocalImportGeneration = 0L
     private lateinit var nutritionImageProcessor: SafeNutritionImageProcessor
+    private lateinit var activeNutritionImageCache: ActiveNutritionImageCache
     private lateinit var nutritionMealStore: NutritionMealStore
     private val nutritionScanCoordinator = NutritionScanCoordinator()
     private val normalizedNutritionImages = mutableMapOf<String, String>()
@@ -268,6 +273,7 @@ class MainActivity : ComponentActivity() {
         }
         lastHealthConnectPermissionGranted = granted.intersect(healthPermissions).isNotEmpty()
         val allGranted = granted.containsAll(healthPermissions)
+        lastHealthConnectAllPermissionsGranted = allGranted
         notifyWeb(
             allGranted,
             if (allGranted) "authorized" else "partial",
@@ -318,6 +324,9 @@ class MainActivity : ComponentActivity() {
         observedLocalDeleteGeneration = localDataStore.localDeleteGeneration()
         observedLocalImportGeneration = localDataStore.appliedImportGeneration()
         nutritionImageProcessor = SafeNutritionImageProcessor(this)
+        activeNutritionImageCache = ActiveNutritionImageCache(
+            File(cacheDir, ACTIVE_NUTRITION_CACHE_DIRECTORY)
+        ).also { it.prune() }
         nutritionMealStore = NutritionMealStore(object : NutritionStringStorage {
             override fun read(): String? = appPreferences.getString(MANUAL_MEALS_KEY, "[]")
             @SuppressLint("UseKtx")
@@ -402,6 +411,17 @@ class MainActivity : ComponentActivity() {
                     request: WebResourceRequest
                 ): WebResourceResponse? {
                     val uri = request.url
+                    if (uri.host == LOCAL_ASSET_HOST &&
+                        uri.path?.startsWith(ACTIVE_SCAN_ASSET_PATH) == true) {
+                        val scanId = uri.lastPathSegment.orEmpty().removeSuffix(".jpg")
+                        val bytes = activeNutritionImageCache.bytes(scanId)
+                        return if (bytes == null) {
+                            WebResourceResponse("text/plain", "UTF-8", 404, "Not Found", emptyMap(),
+                                ByteArrayInputStream(ByteArray(0)))
+                        } else {
+                            WebResourceResponse("image/jpeg", null, ByteArrayInputStream(bytes))
+                        }
+                    }
                     if (NavigationPolicy.isTrusted(uri.toString()) && uri.host == VITALIS_HOST &&
                         uri.path?.startsWith(COACH_ASSET_PATH) == true) {
                         val fileName = uri.lastPathSegment.orEmpty()
@@ -478,6 +498,18 @@ class MainActivity : ComponentActivity() {
                         request.url.host == VITALIS_HOST && errorResponse.statusCode >= 400) {
                         retryClassicInterfaceOrFallback()
                     }
+                }
+
+                override fun onRenderProcessGone(
+                    view: WebView,
+                    detail: RenderProcessGoneDetail
+                ): Boolean {
+                    if (::webView.isInitialized && view === webView) {
+                        runCatching { root.removeView(view) }
+                        runCatching { view.destroy() }
+                        recreate()
+                    }
+                    return true
                 }
             }
             // Controlled offline start for the debug instrumentation smoke test only.
@@ -603,7 +635,15 @@ class MainActivity : ComponentActivity() {
         view.evaluateJavascript(
             """
                 (function(){
-                  return !!window.VitalisFinalUX &&
+                  return !!window.VitalisAndroid &&
+                    window.__vitalisSelectedDateRun2 === 'ready' &&
+                    window.__vitalisNativeCompatibility === 'ready' &&
+                    window.__vitalisConnectorVoiceControls === 'ready' &&
+                    window.__vitalisPowerLayer312 === 'ready' &&
+                    window.__vitalisFinalUx === 'ready' &&
+                    !!window.VitalisDate &&
+                    !!window.VitalisCoaches &&
+                    !!window.VitalisFinalUX &&
                     !!document.querySelector('#vitalis-final-ux') &&
                     !!document.querySelector('[data-widgets]') &&
                     document.querySelectorAll('[data-widget]').length > 0;
@@ -621,14 +661,26 @@ class MainActivity : ComponentActivity() {
                 if (!::webView.isInitialized || view !== webView) return@postDelayed
                 val recoveryScripts = runCatching {
                     listOf(
+                        assets.open("vitalis/selected-date.js").bufferedReader().use { it.readText() },
+                        assets.open("vitalis/compat.js").bufferedReader().use { it.readText() },
                         assets.open("vitalis/vitalis-3.12.js").bufferedReader().use { it.readText() },
                         assets.open("vitalis/final-ux-core.js").bufferedReader().use { it.readText() },
                         assets.open("vitalis/final-ux.js").bufferedReader().use { it.readText() }
                     )
                 }.getOrNull() ?: return@postDelayed
                 val recovery = """
-                    if (!window.VitalisCoaches) window.__vitalisPowerLayer312 = false;
-                    if (!document.querySelector('#vitalis-final-ux')) window.__vitalisFinalUx = false;
+                    if (window.__vitalisSelectedDateRun2 !== 'ready') window.__vitalisSelectedDateRun2 = false;
+                    if (window.__vitalisNativeCompatibility !== 'ready' || !window.VitalisNativeActions) window.__vitalisNativeCompatibility = false;
+                    if (window.__vitalisConnectorVoiceControls !== 'ready') window.__vitalisConnectorVoiceControls = false;
+                    if (window.__vitalisDeepDetails !== 'ready') window.__vitalisDeepDetails = false;
+                    if (window.__vitalisSelectedDayAndNutrition !== 'ready') window.__vitalisSelectedDayAndNutrition = false;
+                    if (window.__vitalisRealAiCoach !== 'ready') window.__vitalisRealAiCoach = false;
+                    if (window.__vitalisCoachRefresh311 !== 'ready') window.__vitalisCoachRefresh311 = false;
+                    if (window.__vitalisPowerLayer312 !== 'ready' || !window.VitalisCoaches) window.__vitalisPowerLayer312 = false;
+                    if (window.__vitalisFinalUx !== 'ready' || !document.querySelector('#vitalis-final-ux')) {
+                      window.__vitalisFinalUx = false;
+                      var partialRoot=document.querySelector('#vitalis-final-ux');if(partialRoot)partialRoot.remove();
+                    }
                 """.trimIndent() + "\n;\n" + recoveryScripts.joinToString("\n;\n")
                 view.evaluateJavascript(recovery) {
                     verifyFinalUxMounted(view, attempt + 1)
@@ -639,6 +691,8 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
+        val returningToForeground = hasResumedOnce
+        hasResumedOnce = true
         ensureHealthConnectClient()
         if (::localDataStore.isInitialized) {
             val persistedConsent = appPreferences.getBoolean(AI_HEALTH_CONSENT, false)
@@ -670,7 +724,7 @@ class MainActivity : ComponentActivity() {
                 normalizedNutritionImages.containsKey(it.scanId)
             }?.let(::dispatchNutritionReadiness)
         }
-        if (refreshAfterConnectorReturn && ::webView.isInitialized) {
+        if ((refreshAfterConnectorReturn || returningToForeground) && ::webView.isInitialized) {
             refreshAfterConnectorReturn = false
             Handler(Looper.getMainLooper()).postDelayed(
                 { readHealthData(selectedHealthDate) },
@@ -892,6 +946,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun openHealthConnectSettings() {
+        refreshAfterConnectorReturn = true
         try { startActivity(Intent(HealthConnectClient.ACTION_HEALTH_CONNECT_SETTINGS)) }
         catch (_: ActivityNotFoundException) { openHealthConnectStore() }
     }
@@ -904,20 +959,33 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun nativeProxyState(): JSONObject = JSONObject().apply {
-        put("selectedHealthDate", selectedHealthDate.toString())
-        put("todayHealthDate", dateState.currentToday().toString())
-        put("connectorStatus", buildConnectorPayload(lastSourcePackages))
-        put("lastHealthData", lastHealthPayload)
-        put("healthAiConfigured", secureSecretStore.status(AiKeyKind.HEALTH).configured)
-        put("developerAiConfigured", secureSecretStore.status(AiKeyKind.DEVELOPER).configured)
-        put("aiHealthConsent", hasAiHealthConsentInternal())
-        put("pendingNutritionScan", nutritionScanCoordinator.active()?.let(::nutritionScanSessionJson) ?: JSONObject.NULL)
-        put("localNutrition", localNutritionMealsPayload(null))
-        put("microphoneEnabled", microphoneEnabled)
-        put("speaking", textToSpeech?.isSpeaking == true)
-        put("run5Fixture", if (isRun5Fixture()) buildRun5FixtureResult() else JSONObject())
-        put("run6Fixture", if (isRun6Fixture()) buildRun6FixtureResult() else JSONObject())
+    private fun nativeProxyState(): JSONObject {
+        val localSnapshot = localDataStore.snapshot()
+        return JSONObject().apply {
+            put("selectedHealthDate", selectedHealthDate.toString())
+            put("todayHealthDate", dateState.currentToday().toString())
+            put("connectorStatus", buildConnectorPayload(lastSourcePackages))
+            put("lastHealthData", lastHealthPayload)
+            put("healthAiConfigured", secureSecretStore.status(AiKeyKind.HEALTH).configured)
+            put("developerAiConfigured", secureSecretStore.status(AiKeyKind.DEVELOPER).configured)
+            put("aiHealthConsent", hasAiHealthConsentInternal())
+            put(
+                "pendingNutritionScan",
+                nutritionScanCoordinator.active()?.let { session ->
+                    nutritionScanSessionJson(session).apply { putNutritionReadiness(session) }
+                } ?: JSONObject.NULL
+            )
+            put("localNutrition", localNutritionMealsPayload(null))
+            put("localState", JSONObject().apply {
+                put("selectedCoach", localSnapshot.selectedCoach ?: JSONObject.NULL)
+                put("dashboardSettings", localSnapshot.dashboardSettings ?: JSONObject.NULL)
+                put("localJournal", localSnapshot.localJournal)
+            })
+            put("microphoneEnabled", microphoneEnabled)
+            put("speaking", textToSpeech?.isSpeaking == true)
+            put("run5Fixture", if (isRun5Fixture()) buildRun5FixtureResult() else JSONObject())
+            put("run6Fixture", if (isRun6Fixture()) buildRun6FixtureResult() else JSONObject())
+        }
     }
 
     private fun buildNativeProxyBootstrap(): String {
@@ -927,6 +995,13 @@ class MainActivity : ComponentActivity() {
               var channel=window.$NATIVE_CHANNEL_NAME;
               if(!channel||typeof channel.postMessage!=="function"){window.VitalisAndroid=null;return;}
               var state=$state;
+              var localState=state.localState||{};
+              try{
+                if(localState.selectedCoach) localStorage.setItem("vitalis-selected-coach-v312",localState.selectedCoach);
+                if(localState.dashboardSettings) localStorage.setItem("vitalis-offline-v1",JSON.stringify(localState.dashboardSettings));
+                if(Array.isArray(localState.localJournal)) localStorage.setItem("vitalis-native-journal-v1",JSON.stringify(localState.localJournal));
+                window.__vitalisHydratedNativeLocalState=true;
+              }catch(_){window.__vitalisHydratedNativeLocalState=false;}
               var sequence=0;
               function call(method,args){
                 var id="bridge-"+(++sequence)+"-"+Date.now();
@@ -1608,6 +1683,7 @@ class MainActivity : ComponentActivity() {
         invalidateActiveNutritionAnalysis("superseded_by_new_scan")
         supersededScanId?.let { oldScanId ->
             normalizedNutritionImages.remove(oldScanId)
+            activeNutritionImageCache.delete(oldScanId)
             nutritionScanCoordinator.cancel(oldScanId)?.also(::dispatchNutritionScanState)
         }
         val session = nutritionScanCoordinator.begin(scanId, date, source, Instant.now())
@@ -1656,10 +1732,10 @@ class MainActivity : ComponentActivity() {
         }
         lifecycleScope.launch(kotlinx.coroutines.Dispatchers.IO) {
             val result = nutritionImageProcessor.process(uri)
+            handleNutritionImageResult(session.scanId, result)
             pendingNutritionCameraFile?.delete()
             pendingNutritionCameraFile = null
             pendingNutritionCameraUri = null
-            handleNutritionImageResult(session.scanId, result)
         }
     }
 
@@ -1690,6 +1766,16 @@ class MainActivity : ComponentActivity() {
             }
             return
         }
+        if (!activeNutritionImageCache.save(scanId, image.dataUrl)) {
+            nutritionScanCoordinator.fail(scanId, "temporary_photo_store_failed")?.also {
+                persistNutritionSession(it)
+                dispatchNutritionScanState(
+                    it,
+                    "La photo n’a pas pu être conservée pour cette analyse. Réessayez."
+                )
+            }
+            return
+        }
         normalizedNutritionImages[scanId] = image.dataUrl
         val session = nutritionScanCoordinator.markImageReady(scanId, image.metadata) ?: return
         persistNutritionSession(session)
@@ -1697,7 +1783,7 @@ class MainActivity : ComponentActivity() {
         dispatchWebEvent("vitalis-nutrition-image-ready", JSONObject().apply {
             put("scanId", scanId)
             put("selectedDate", session.selectedDate.toString())
-            put("preview", image.dataUrl)
+            put("preview", activeNutritionPreviewUrl(scanId))
             put("metadata", normalizedImageMetadataJson(image.metadata))
             put("state", NutritionUiState.PHOTO_READY.name)
         })
@@ -1712,6 +1798,7 @@ class MainActivity : ComponentActivity() {
         if (!NutritionIds.valid(scanId)) return
         if (nutritionScanCoordinator.active()?.scanId == scanId) invalidateActiveNutritionAnalysis(reason)
         normalizedNutritionImages.remove(scanId)
+        activeNutritionImageCache.delete(scanId)
         nutritionScanCoordinator.cancel(scanId)?.also {
             persistNutritionSession(it)
             dispatchNutritionScanState(it)
@@ -2053,6 +2140,7 @@ class MainActivity : ComponentActivity() {
             dispatchNutritionScanState(it)
         }
         normalizedNutritionImages.remove(scanId)
+        activeNutritionImageCache.delete(scanId)
         readHealthData(selectedHealthDate)
         return nutritionResult(true, null).apply {
             put("meal", NutritionMealCodec.encode(record))
@@ -2119,6 +2207,7 @@ class MainActivity : ComponentActivity() {
             invalidateActiveNutritionAnalysis("local_data_deleted")
             activeScanId?.let { nutritionScanCoordinator.cancel(it) }
             normalizedNutritionImages.clear()
+            activeNutritionImageCache.clear()
             appPreferences.edit { remove(PENDING_NUTRITION_SCAN_KEY) }
             dispatchWebEvent("vitalis-nutrition-local-cleared", JSONObject().put("ok", true))
             readHealthData(selectedHealthDate)
@@ -2138,8 +2227,15 @@ class MainActivity : ComponentActivity() {
         }
 
     private fun persistNutritionSession(session: NutritionScanSession) {
+        if (session.analysisStatus in setOf(
+                NutritionScanStatus.SAVED,
+                NutritionScanStatus.CANCELLED
+            )) {
+            appPreferences.edit { remove(PENDING_NUTRITION_SCAN_KEY) }
+            return
+        }
         val payload = JSONObject().apply {
-            put("schemaVersion", 1)
+            put("schemaVersion", 2)
             put("scanId", session.scanId)
             put("createdAt", session.createdAt.toString())
             put("selectedDate", session.selectedDate.toString())
@@ -2148,6 +2244,12 @@ class MainActivity : ComponentActivity() {
             put("analysisRequestId", session.analysisRequestId ?: JSONObject.NULL)
             put("savedMealId", session.savedMealId ?: JSONObject.NULL)
             put("errorCode", session.errorCode ?: JSONObject.NULL)
+            session.normalizedImageMetadata?.let {
+                put("normalizedImageMetadata", normalizedImageMetadataJson(it))
+            }
+            session.draftResult?.let {
+                put("draftResult", NutritionEstimateParser.estimateJson(it))
+            }
         }
         appPreferences.edit { putString(PENDING_NUTRITION_SCAN_KEY, payload.toString()) }
     }
@@ -2166,11 +2268,25 @@ class MainActivity : ComponentActivity() {
         val persistedStatus = runCatching {
             NutritionScanStatus.valueOf(source.optString("analysisStatus"))
         }.getOrNull() ?: return null
-        val restoredStatus = if (persistedStatus in setOf(
+        val cachedImage = activeNutritionImageCache.load(scanId)
+        if (cachedImage != null) normalizedNutritionImages[scanId] = cachedImage
+        val interrupted = persistedStatus in setOf(
                 NutritionScanStatus.NORMALIZING,
-                NutritionScanStatus.READY_FOR_ANALYSIS,
                 NutritionScanStatus.ANALYZING
-            )) NutritionScanStatus.ERROR else persistedStatus
+            )
+        val needsPhoto = persistedStatus in setOf(
+            NutritionScanStatus.READY_FOR_ANALYSIS,
+            NutritionScanStatus.ANALYZING,
+            NutritionScanStatus.REVIEW,
+            NutritionScanStatus.ERROR
+        )
+        val restoredStatus = if (interrupted || (needsPhoto && cachedImage == null)) {
+            NutritionScanStatus.ERROR
+        } else persistedStatus
+        val metadata = source.optJSONObject("normalizedImageMetadata")?.let(::decodeNormalizedImageMetadata)
+        val draft = source.optJSONObject("draftResult")?.let {
+            NutritionEstimateParser.parseForReview(it.toString()).value
+        }
         return nutritionScanCoordinator.restore(
             NutritionScanSession(
                 scanId = scanId,
@@ -2178,12 +2294,15 @@ class MainActivity : ComponentActivity() {
                 createdAt = createdAt,
                 selectedDate = date,
                 imageSource = imageSource,
+                normalizedImageMetadata = metadata,
                 analysisStatus = restoredStatus,
                 analysisRequestId = source.optString("analysisRequestId")
                     .takeIf { source.has("analysisRequestId") && !source.isNull("analysisRequestId") && it.isNotBlank() },
                 savedMealId = source.optString("savedMealId")
                     .takeIf { source.has("savedMealId") && !source.isNull("savedMealId") && it.isNotBlank() },
-                errorCode = if (restoredStatus == NutritionScanStatus.ERROR) "scan_interrupted"
+                draftResult = draft,
+                errorCode = if (needsPhoto && cachedImage == null) "photo_cache_missing"
+                    else if (interrupted) "scan_interrupted"
                     else source.optString("errorCode")
                         .takeIf { source.has("errorCode") && !source.isNull("errorCode") && it.isNotBlank() }
             )
@@ -2201,6 +2320,24 @@ class MainActivity : ComponentActivity() {
         put("normalizedHeight", metadata.normalizedHeight)
         put("orientationApplied", metadata.orientationApplied)
     }
+
+    private fun decodeNormalizedImageMetadata(source: JSONObject): NormalizedImageMetadata? =
+        runCatching {
+            NormalizedImageMetadata(
+                sourceMimeType = source.getString("sourceMimeType"),
+                sourceBytes = source.getLong("sourceBytes"),
+                sourceWidth = source.getInt("sourceWidth"),
+                sourceHeight = source.getInt("sourceHeight"),
+                normalizedMimeType = source.getString("normalizedMimeType"),
+                normalizedBytes = source.getInt("normalizedBytes"),
+                normalizedWidth = source.getInt("normalizedWidth"),
+                normalizedHeight = source.getInt("normalizedHeight"),
+                orientationApplied = source.getBoolean("orientationApplied")
+            )
+        }.getOrNull()
+
+    private fun activeNutritionPreviewUrl(scanId: String): String =
+        "https://$LOCAL_ASSET_HOST$ACTIVE_SCAN_ASSET_PATH$scanId.jpg"
 
     private fun dispatchNutritionScanState(
         session: NutritionScanSession,
@@ -2250,6 +2387,14 @@ class MainActivity : ComponentActivity() {
         put("savedMealId", session.savedMealId ?: JSONObject.NULL)
         put("errorCode", session.errorCode ?: JSONObject.NULL)
         session.normalizedImageMetadata?.let { put("image", normalizedImageMetadataJson(it)) }
+        if (normalizedNutritionImages.containsKey(session.scanId)) {
+            put("previewUrl", activeNutritionPreviewUrl(session.scanId))
+        }
+        session.draftResult?.let {
+            put("draftResult", NutritionEstimateParser.toReviewJson(
+                NutritionValidationResult(it)
+            ))
+        }
     }
 
     private fun dispatchNutritionOperation(operation: String, ok: Boolean, error: String?) {
@@ -2395,6 +2540,17 @@ class MainActivity : ComponentActivity() {
 
     private fun healthStateJson(state: HealthConnectStateModel) = JSONObject().apply {
         put("code", state.code.name)
+        put("availability", when (state.code) {
+            HealthConnectStateCode.NOT_SUPPORTED,
+            HealthConnectStateCode.PROVIDER_NOT_INSTALLED -> "UNAVAILABLE"
+            HealthConnectStateCode.PROVIDER_UPDATE_REQUIRED -> "PROVIDER_UPDATE_REQUIRED"
+            else -> "AVAILABLE"
+        })
+        put("uiState", HealthConnectUiStateResolver.resolve(state.code).name)
+        put("authorized", state.code in setOf(
+            HealthConnectStateCode.AUTHORIZED_NO_DATA,
+            HealthConnectStateCode.AUTHORIZED_WITH_DATA
+        ))
         put("label", state.label)
         put("reason", state.reason ?: JSONObject.NULL)
         put("retryAction", state.retryAction ?: JSONObject.NULL)
@@ -2667,6 +2823,7 @@ class MainActivity : ComponentActivity() {
                 return@launch
             }
             lastHealthConnectPermissionGranted = granted.intersect(healthPermissions).isNotEmpty()
+            lastHealthConnectAllPermissionsGranted = granted.containsAll(healthPermissions)
             val permissionState = healthPermissionState(granted)
             val hasAnyHealthPermission = granted.intersect(healthPermissions).isNotEmpty()
             if (!hasAnyHealthPermission) {
@@ -2682,18 +2839,6 @@ class MainActivity : ComponentActivity() {
                 val interval = HealthDayIntervals.forDate(selectedDate, zone)
                 val rangeStart = interval.start
                 val rangeEnd = interval.endExclusive
-                val filter = TimeRangeFilter.between(now.minus(Duration.ofDays(30)), now)
-                val steps = if (HealthPermission.getReadPermission(StepsRecord::class) in granted) dataSource.readAll(StepsRecord::class, filter) else emptyList()
-                val sleep = if (HealthPermission.getReadPermission(SleepSessionRecord::class) in granted) dataSource.readAll(SleepSessionRecord::class, filter) else emptyList()
-                val exercise = if (HealthPermission.getReadPermission(ExerciseSessionRecord::class) in granted) dataSource.readAll(ExerciseSessionRecord::class, filter) else emptyList()
-                val heart = if (HealthPermission.getReadPermission(HeartRateRecord::class) in granted) dataSource.readAll(HeartRateRecord::class, filter) else emptyList()
-                val hydration = if (HealthPermission.getReadPermission(HydrationRecord::class) in granted) dataSource.readAll(HydrationRecord::class, filter) else emptyList()
-                val distance = if (HealthPermission.getReadPermission(DistanceRecord::class) in granted) dataSource.readAll(DistanceRecord::class, filter) else emptyList()
-                val activeCalories = if (HealthPermission.getReadPermission(ActiveCaloriesBurnedRecord::class) in granted) dataSource.readAll(ActiveCaloriesBurnedRecord::class, filter) else emptyList()
-                val oxygen = if (HealthPermission.getReadPermission(OxygenSaturationRecord::class) in granted) dataSource.readAll(OxygenSaturationRecord::class, filter) else emptyList()
-                val weight = if (HealthPermission.getReadPermission(WeightRecord::class) in granted) dataSource.readAll(WeightRecord::class, filter) else emptyList()
-                val nutrition = if (HealthPermission.getReadPermission(NutritionRecord::class) in granted) dataSource.readAll(NutritionRecord::class, filter) else emptyList()
-                val recentSources = (steps.map { it.metadata.dataOrigin.packageName } + sleep.map { it.metadata.dataOrigin.packageName } + exercise.map { it.metadata.dataOrigin.packageName } + heart.map { it.metadata.dataOrigin.packageName } + hydration.map { it.metadata.dataOrigin.packageName } + distance.map { it.metadata.dataOrigin.packageName } + activeCalories.map { it.metadata.dataOrigin.packageName } + oxygen.map { it.metadata.dataOrigin.packageName } + weight.map { it.metadata.dataOrigin.packageName } + nutrition.map { it.metadata.dataOrigin.packageName }).filter { it.isNotBlank() }.distinct()
                 val selectedDay = TimeRangeFilter.between(rangeStart, rangeEnd)
                 val stepsDay = if (HealthPermission.getReadPermission(StepsRecord::class) in granted) dataSource.readAll(StepsRecord::class, selectedDay) else emptyList()
                 val sleepDay = if (HealthPermission.getReadPermission(SleepSessionRecord::class) in granted) dataSource.readAll(SleepSessionRecord::class, selectedDay) else emptyList()
@@ -2711,8 +2856,7 @@ class MainActivity : ComponentActivity() {
                     runCatching { Instant.parse(it.optString("recordedAt")) }.getOrNull()
                 }
                 val sources = (
-                    recentSources +
-                        stepsDay.map { it.metadata.dataOrigin.packageName } +
+                    stepsDay.map { it.metadata.dataOrigin.packageName } +
                         sleepDay.map { it.metadata.dataOrigin.packageName } +
                         exerciseDay.map { it.metadata.dataOrigin.packageName } +
                         heartDay.map { it.metadata.dataOrigin.packageName } +
@@ -3234,7 +3378,9 @@ class MainActivity : ComponentActivity() {
             HealthConnectClient.SDK_UNAVAILABLE_PROVIDER_UPDATE_REQUIRED -> "update_required"
             else -> "unavailable"
         }
-        val packages = sourcePackages.filter { it.isNotBlank() }.distinct()
+        val packages = sourcePackages.filter {
+            it.isNotBlank() && it != applicationContext.packageName
+        }.distinct()
         val catalogItems = connectorCatalog.map { definition ->
             val detected = definition.packages.firstOrNull { it in packages }
             val installed = definition.packages.firstOrNull(::isPackageInstalled)
@@ -3244,7 +3390,8 @@ class MainActivity : ComponentActivity() {
                     installed = installed != null,
                     healthConnectAvailable = healthStatus == "available",
                     healthConnectPermissionGranted = lastHealthConnectPermissionGranted,
-                    providerRecordsDetected = detected != null
+                    providerRecordsDetected = detected != null,
+                    healthConnectAllPermissionsGranted = lastHealthConnectAllPermissionsGranted
                 )
             )
             JSONObject().apply {
@@ -3307,6 +3454,7 @@ class MainActivity : ComponentActivity() {
         ConnectorRuntimeState.INSTALLED -> "Application installée"
         ConnectorRuntimeState.SETUP_REQUIRED -> "Configuration requise dans l’application"
         ConnectorRuntimeState.HEALTH_CONNECT_PERMISSION_REQUIRED -> "Autorisation Health Connect requise"
+        ConnectorRuntimeState.HEALTH_CONNECT_PARTIAL_PERMISSION -> "Autorisations Health Connect partielles"
         ConnectorRuntimeState.HEALTH_CONNECT_AVAILABLE_NO_DATA -> "Accès Health Connect activé, aucune donnée fournisseur détectée"
         ConnectorRuntimeState.HEALTH_CONNECT_DATA_AVAILABLE -> "Données fournisseur détectées via Health Connect"
         ConnectorRuntimeState.DIRECT_AUTH_REQUIRED -> "Autorisation directe requise"
@@ -3399,6 +3547,8 @@ class MainActivity : ComponentActivity() {
         private const val VITALIS_HOST = "vitalis-health-os.gillesarnaudasse65.chatgpt.site"
         private const val VITALIS_URL = "https://$VITALIS_HOST/"
         private const val COACH_ASSET_PATH = "/__vitalis/coaches/"
+        private const val ACTIVE_SCAN_ASSET_PATH = "/active-nutrition-scan/"
+        private const val ACTIVE_NUTRITION_CACHE_DIRECTORY = "nutrition-active"
         private val COACH_ASSET_FILES = setOf(
             "kofi.webp",
             "ama.webp",

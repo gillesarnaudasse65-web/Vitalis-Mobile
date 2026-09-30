@@ -86,6 +86,7 @@ nav{position:fixed;z-index:30;left:10px;right:10px;bottom:calc(8px + env(safe-ar
  var defaults={profile:{name:"Gilles",stepGoal:8000,waterGoal:2.5,sleepGoal:8},health:{steps:0,sleepMinutes:null,averageHeartRate:null,hydrationLitres:0,distanceKm:null,activeCalories:null,oxygenPercent:null,weightKg:null,sources:[],syncedAt:null},entries:[]};
  var state=load();
  var connectors=[];
+ var mealPreviewObjectUrl=null;
  function load(){try{var v=JSON.parse(localStorage.getItem(key));return Object.assign({},defaults,v,{profile:Object.assign({},defaults.profile,v&&v.profile),health:Object.assign({},defaults.health,v&&v.health),entries:v&&v.entries||[]});}catch(e){return JSON.parse(JSON.stringify(defaults));}}
  function save(){localStorage.setItem(key,JSON.stringify(state));}
  function fmtDate(v){return new Intl.DateTimeFormat("fr-FR",{day:"2-digit",month:"short",hour:"2-digit",minute:"2-digit"}).format(new Date(v));}
@@ -154,7 +155,7 @@ nav{position:fixed;z-index:30;left:10px;right:10px;bottom:calc(8px + env(safe-ar
   if(type==="water")body='<div class="field"><label>Quantité</label><select id="waterAmount"><option value=".25">250 ml</option><option value=".33">330 ml</option><option value=".5">500 ml</option><option value=".75">750 ml</option></select></div>';
   if(type==="measure")body='<div class="field"><label>Type de mesure</label><select id="measureType"><option>Poids</option><option>Tension artérielle</option><option>Glycémie</option><option>Température</option><option>SpO₂</option><option>Fréquence cardiaque</option></select></div><div class="field"><label>Valeur</label><input id="measureValue" placeholder="Ex. 78 kg ou 120/80"></div>';
   body+='<button class="save" id="saveEntry">Enregistrer</button>';document.getElementById("modalBody").innerHTML=body;document.getElementById("modal").classList.remove("hidden");
-  var photo=document.getElementById("mealPhoto");if(photo)photo.onchange=function(){var f=this.files[0];if(f){var img=document.getElementById("mealPreview");img.src=URL.createObjectURL(f);img.classList.remove("hidden");}};
+  var photo=document.getElementById("mealPhoto");if(photo)photo.onchange=function(){var f=this.files[0];if(f){if(mealPreviewObjectUrl)URL.revokeObjectURL(mealPreviewObjectUrl);var img=document.getElementById("mealPreview");mealPreviewObjectUrl=URL.createObjectURL(f);img.onerror=function(){if(mealPreviewObjectUrl)URL.revokeObjectURL(mealPreviewObjectUrl);mealPreviewObjectUrl=null;img.removeAttribute("src");img.classList.add("hidden");var note=document.createElement("div");note.className="empty";note.textContent="Aperçu indisponible. Choisissez une autre photo.";img.parentNode.appendChild(note);};img.src=mealPreviewObjectUrl;img.classList.remove("hidden");}};
   document.getElementById("saveEntry").onclick=function(){saveEntry(type);};
  }
  function saveEntry(type){
@@ -165,7 +166,7 @@ nav{position:fixed;z-index:30;left:10px;right:10px;bottom:calc(8px + env(safe-ar
   if(type==="measure"){title=document.getElementById("measureType").value;detail=document.getElementById("measureValue").value||"Valeur non précisée";if(title==="Poids"){var w=parseFloat(detail.replace(",","."));if(w)state.health.weightKg=w;}}
   state.entries.push({id:Date.now(),type:type,title:title,detail:detail,at:new Date().toISOString()});save();closeModal();render();setPage("journal");
  }
- function closeModal(){document.getElementById("modal").classList.add("hidden");}
+ function closeModal(){if(mealPreviewObjectUrl){URL.revokeObjectURL(mealPreviewObjectUrl);mealPreviewObjectUrl=null;}document.getElementById("modal").classList.add("hidden");document.getElementById("modalBody").innerHTML="";}
  document.querySelectorAll("[data-page]").forEach(function(b){b.onclick=function(){setPage(this.dataset.page);};});
  document.querySelectorAll("[data-action]").forEach(function(b){b.onclick=function(){openModal(this.dataset.action);};});
  document.getElementById("closeModal").onclick=closeModal;document.getElementById("modal").onclick=function(e){if(e.target===this)closeModal();};

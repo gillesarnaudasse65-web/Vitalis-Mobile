@@ -9,6 +9,25 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class HealthConnectReliabilityTest {
+    @Test fun publicUiStatesNeverConfuseAuthorizationWithData() {
+        assertEquals(
+            HealthConnectUiState.PERMISSION_REQUIRED,
+            HealthConnectUiStateResolver.resolve(HealthConnectStateCode.PERMISSION_DENIED)
+        )
+        assertEquals(
+            HealthConnectUiState.PARTIAL_PERMISSION,
+            HealthConnectUiStateResolver.resolve(HealthConnectStateCode.PARTIAL_PERMISSION)
+        )
+        assertEquals(
+            HealthConnectUiState.NO_DATA,
+            HealthConnectUiStateResolver.resolve(HealthConnectStateCode.AUTHORIZED_NO_DATA)
+        )
+        assertEquals(
+            HealthConnectUiState.DATA_AVAILABLE,
+            HealthConnectUiStateResolver.resolve(HealthConnectStateCode.AUTHORIZED_WITH_DATA)
+        )
+    }
+
     private val permissions = setOf("steps", "sleep", "heart")
 
     @Test fun availabilityStatesAreExplicit() {

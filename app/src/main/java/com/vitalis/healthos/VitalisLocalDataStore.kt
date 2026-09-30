@@ -106,6 +106,10 @@ class VitalisLocalDataStore(private val context: Context) {
         if (captures.exists()) captures.listFiles()?.forEach { file ->
             if (file.isFile && file.name.matches(Regex("capture-[A-Za-z0-9-]+\\.jpg"))) file.delete()
         }
+        val activeNutrition = java.io.File(context.cacheDir, "nutrition-active")
+        if (activeNutrition.exists()) activeNutrition.listFiles()?.forEach { file ->
+            if (file.isFile) file.delete()
+        }
         return if (cleared) VitalisDataOperationResult(
             true,
             summary = "Vitalis local data deleted. Health Connect permissions are managed separately."

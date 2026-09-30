@@ -1,8 +1,8 @@
 (function () {
   "use strict";
   if (/\/run(?:2|3|4|5|6)[^/]*fixture\.html$/.test(location.pathname)) return;
-  if (window.__vitalisFinalUx || !window.VitalisUxCore) return;
-  window.__vitalisFinalUx = true;
+  if (window.__vitalisFinalUx === "ready" || window.__vitalisFinalUx === "initializing" || !window.VitalisUxCore) return;
+  window.__vitalisFinalUx = "initializing";
 
   var Core = window.VitalisUxCore;
   var STORE_KEY = "vitalis-offline-v1";
@@ -182,7 +182,7 @@
     }
     if (id === "coach") {
       coach = window.VitalisCoaches && window.VitalisCoaches.selected ? window.VitalisCoaches.selected() : {id:"general",name:"Kofi",role:"Coach santé global",image:"kofi.webp"};
-      var base = location.hostname.indexOf("chatgpt.site") >= 0 ? location.origin + "/__vitalis/coaches/" : "https://appassets.androidplatform.net/assets/vitalis/coaches/";
+      var base = "https://appassets.androidplatform.net/assets/vitalis/coaches/";
       var roster = window.VitalisCoaches && Array.isArray(window.VitalisCoaches.all) ? window.VitalisCoaches.all : [
         {id:"general",name:"Kofi",role:"Santé globale",image:"kofi.webp"},
         {id:"nutrition",name:"Ama",role:"Nutrition",image:"ama.webp"},
@@ -194,10 +194,10 @@
       var rosterHtml = roster.map(function (item) {
         var active = item.id === (coach.id || "general") ? " active" : "";
         return "<button type='button' class='vux-coach-chip" + active + "' data-coach-select='" + esc(item.id) + "' aria-label='Choisir " + esc(item.name) + "'>" +
-          "<img src='" + base + esc(item.image) + "' alt=''><span><b>" + esc(item.name) + "</b><small>" + esc(item.role) + "</small></span></button>";
+          "<img data-vitalis-coach-id='" + esc(item.id) + "' src='" + base + esc(item.image) + "' alt='" + esc(item.name) + "'><span><b>" + esc(item.name) + "</b><small>" + esc(item.role) + "</small></span></button>";
       }).join("");
       return "<section class='vux-card vux-coach-card vux-coach-suite' data-widget='coach' data-detail='coach' tabindex='0' role='button'>" +
-        "<div class='vux-coach-feature'><img class='vux-coach-hero' src='" + base + esc(coach.image || "kofi.webp") + "' alt='" + esc(coach.name || "Kofi") + "'>" +
+        "<div class='vux-coach-feature'><img class='vux-coach-hero' data-vitalis-coach-id='" + esc(coach.id || "general") + "' src='" + base + esc(coach.image || "kofi.webp") + "' alt='" + esc(coach.name || "Kofi") + "'>" +
         "<div class='vux-coach-copy'><span class='vux-eyebrow'>VOTRE ÉQUIPE VITALIS</span><h3>" + esc(coach.name || "Kofi") + "</h3><p>" + esc(coach.role || "Coach Vitalis") + "</p>" +
         "<small>Conseils adaptés aux données et à la date sélectionnée.</small><button class='vux-coach-primary' data-act='coach'>Parler à " + esc(coach.name || "Kofi") + "</button></div></div>" +
         "<div class='vux-coach-roster' aria-label='Choisir un coach'>" + rosterHtml + "</div></section>";
@@ -207,8 +207,8 @@
         quick("scan-meal","nutrition","Scanner un repas") + quick("coach","coach","Parler au coach") + quick("water","hydration","Ajouter 250 ml"," data-amount='.25'") + quick("measure","body","Ajouter une mesure") + quick("sync","sync","Synchroniser") + "</div></section>";
     }
     if (id === "sources") {
-      sourceState = String(health.syncState || health.state || "NO_DATA").toUpperCase();
-      var text = sourceState === "DATA" || sourceState === "READY" ? "Prêt" : sourceState === "PARTIAL_PERMISSION" ? "Autorisations partielles" : sourceState === "NOT_AUTHORIZED" || sourceState === "PERMISSION_REQUIRED" ? "Autorisation requise" : sourceState === "ERROR" ? "Lecture impossible" : "Aucune donnée";
+      sourceState = String(health.healthConnectState && health.healthConnectState.uiState || health.syncState || health.state || "NO_DATA").toUpperCase();
+      var text = sourceState === "DATA_AVAILABLE" || sourceState === "DATA" || sourceState === "READY" ? "Données disponibles" : sourceState === "PARTIAL_PERMISSION" ? "Autorisations partielles" : sourceState === "NOT_AUTHORIZED" || sourceState === "PERMISSION_REQUIRED" ? "Autorisation requise" : sourceState === "PROVIDER_UPDATE_REQUIRED" ? "Mise à jour requise" : sourceState === "UNAVAILABLE" ? "Indisponible" : sourceState === "ERROR" ? "Lecture impossible" : "Aucune donnée";
       return "<article class='vux-card vux-source-card state-" + sourceState.toLowerCase() + "' data-widget='sources' data-detail='sources' tabindex='0' role='button'><span class='vux-icon-box'>" + icon("sources") + "</span><div><span class='vux-card-title'>Health Connect</span><strong>" + esc(text) + "</strong><small>" + esc(lastUpdated()) + "</small></div><span class='vux-chevron'>›</span></article>";
     }
     return "";
@@ -230,6 +230,7 @@
     root.querySelector("[data-offline]").classList.toggle("hidden", navigator.onLine);
     root.querySelector("[data-last-updated]").textContent = lastUpdated();
     root.querySelector("[data-widgets]").innerHTML = visible.map(widgetHtml).join("");
+    if (window.VitalisImageReliability) window.VitalisImageReliability.apply(root);
     root.setAttribute("data-density", settings.density);
     bindCards();
   }
@@ -269,7 +270,7 @@
     if (id === "body") { add("Poids", health.weightKg == null ? "Aucune mesure récente" : Number(health.weightKg).toFixed(1)+" kg"); add("Masse grasse", health.bodyFatPercent == null ? "Indisponible" : health.bodyFatPercent+" %"); }
     if (id === "recovery") { add("Indicateur", health.recovery == null ? "Données insuffisantes" : health.recovery+" %"); add("Entrées", "Sommeil, cœur et activité disponibles"); }
     if (id === "mental") { add("Dernier check-in", health.wellbeing || "Aucun check-in récent"); add("Coach", "Zuri"); }
-    if (id === "sources") { add("État", health.syncState || health.state || "NO_DATA"); add("Dernière synchronisation", lastUpdated()); add("Sources", (health.sources || []).join(", ") || "Aucune source détectée"); }
+    if (id === "sources") { add("État", health.healthConnectState && health.healthConnectState.uiState || health.syncState || health.state || "NO_DATA"); add("Dernière synchronisation", lastUpdated()); add("Sources", (health.sources || []).join(", ") || "Aucune source détectée"); }
     return rows;
   }
   function openDetail(id) {
@@ -482,6 +483,7 @@ body.vitalis-final-ux-active{margin:0!important;background:var(--vux-bg)!importa
     root.querySelector("[data-date-input]").onchange=function(){if(window.VitalisDate)window.VitalisDate.select(this.value);health.selectedDate=this.value;render();};
     render();
     window.__vitalisFinalUxMetrics=window.__vitalisFinalUxMetrics||{};window.__vitalisFinalUxMetrics.initialRenderMs=(performance.now?performance.now():Date.now())-renderStart;
+    window.__vitalisFinalUx = "ready";
   }
 
   window.addEventListener("vitalis-health-data",function(event){health=Object.assign({},health,event.detail||{});render();});

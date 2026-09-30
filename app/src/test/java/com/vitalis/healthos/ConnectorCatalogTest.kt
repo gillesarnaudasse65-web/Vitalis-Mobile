@@ -37,6 +37,21 @@ class ConnectorCatalogTest {
         assertEquals(ConnectorRuntimeState.HEALTH_CONNECT_AVAILABLE_NO_DATA, state)
     }
 
+    @Test fun partialHealthPermissionIsNeverPresentedAsFullyAuthorized() {
+        val definition = requireNotNull(ConnectorCatalog.find("samsung_health"))
+        val state = ConnectorStateResolver.resolve(
+            definition,
+            ConnectorEvidence(
+                installed = true,
+                healthConnectAvailable = true,
+                healthConnectPermissionGranted = true,
+                providerRecordsDetected = false,
+                healthConnectAllPermissionsGranted = false
+            )
+        )
+        assertEquals(ConnectorRuntimeState.HEALTH_CONNECT_PARTIAL_PERMISSION, state)
+    }
+
     @Test fun attributedProviderRecordsAreDataAvailable() {
         val state = resolve("samsung_health", installed = true, permission = true, records = true)
         assertEquals(ConnectorRuntimeState.HEALTH_CONNECT_DATA_AVAILABLE, state)

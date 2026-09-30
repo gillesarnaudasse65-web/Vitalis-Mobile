@@ -1,6 +1,6 @@
 (function () {
-  if (window.__vitalisSelectedDateRun2) return;
-  window.__vitalisSelectedDateRun2 = true;
+  if (window.__vitalisSelectedDateRun2 === "ready" || window.__vitalisSelectedDateRun2 === "initializing") return;
+  window.__vitalisSelectedDateRun2 = "initializing";
   var bridge = window.VitalisAndroid || null;
   var key = 'vitalis-selected-date-v1';
   var active = '';
@@ -77,4 +77,5 @@
     if (target.matches('[data-vitalis-today]') || label === "aujourd'hui" ||
         label === 'aujourd’hui' || label === 'today') today();
   });
+  window.__vitalisSelectedDateRun2 = "ready";
 })();

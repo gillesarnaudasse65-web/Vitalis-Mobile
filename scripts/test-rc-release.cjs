@@ -27,7 +27,7 @@ test('release signing remains secret-driven and fails closed by default', () => 
 
 test('test-signed RC output is explicitly prohibited from production distribution', () => {
   const workflow = read('.github/workflows/build-apk.yml');
-  assert.match(workflow, /Vitalis-3\.15\.0-rc1-physical-hotfix-qa/);
+  assert.match(workflow, /Vitalis-3\.15\.0-rc1-deep-stability-qa/);
   assert.match(workflow, /NOT FOR PRODUCTION DISTRIBUTION/);
 });
 
