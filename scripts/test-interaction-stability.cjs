@@ -86,3 +86,10 @@ test('renderer loss cannot recreate an Activity that is already being destroyed'
   assert.match(mainActivity, /override fun onResume\(\)[\s\S]*if \(renderProcessRecoveryPending\)/);
   assert.match(instrumentation, /JSON\.stringify\(window\.__dateSelectCalls\)/);
 });
+
+test('stale native mirrors cannot roll back newer synchronous Web state', () => {
+  assert.match(mainActivity, /localState\.selectedCoach&&localStorage\.getItem\("vitalis-selected-coach-v312"\)===null/);
+  assert.match(mainActivity, /localState\.dashboardSettings&&localStorage\.getItem\("vitalis-offline-v1"\)===null/);
+  assert.match(mainActivity, /localState\.localJournal\)&&localStorage\.getItem\("vitalis-native-journal-v1"\)===null/);
+  assert.match(mainActivity, /Explicit native imports still replace Web state/);
+});

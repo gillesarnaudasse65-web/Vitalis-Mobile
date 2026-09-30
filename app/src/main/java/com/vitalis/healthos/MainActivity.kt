@@ -1052,9 +1052,17 @@ class MainActivity : ComponentActivity() {
               var state=$state;
               var localState=state.localState||{};
               try{
-                if(localState.selectedCoach) localStorage.setItem("vitalis-selected-coach-v312",localState.selectedCoach);
-                if(localState.dashboardSettings) localStorage.setItem("vitalis-offline-v1",JSON.stringify(localState.dashboardSettings));
-                if(Array.isArray(localState.localJournal)) localStorage.setItem("vitalis-native-journal-v1",JSON.stringify(localState.localJournal));
+                // Web storage is written synchronously while the hardened native mirror is
+                // updated through an asynchronous origin bridge. During an immediate Activity
+                // recreation the mirror can therefore be one event behind. Hydrate only missing
+                // Web values so an older mirror never rolls back the user's latest choice.
+                // Explicit native imports still replace Web state in applyImportedLocalStateToWeb.
+                if(localState.selectedCoach&&localStorage.getItem("vitalis-selected-coach-v312")===null)
+                  localStorage.setItem("vitalis-selected-coach-v312",localState.selectedCoach);
+                if(localState.dashboardSettings&&localStorage.getItem("vitalis-offline-v1")===null)
+                  localStorage.setItem("vitalis-offline-v1",JSON.stringify(localState.dashboardSettings));
+                if(Array.isArray(localState.localJournal)&&localStorage.getItem("vitalis-native-journal-v1")===null)
+                  localStorage.setItem("vitalis-native-journal-v1",JSON.stringify(localState.localJournal));
                 window.__vitalisHydratedNativeLocalState=true;
               }catch(_){window.__vitalisHydratedNativeLocalState=false;}
               var sequence=0;
