@@ -4,7 +4,9 @@ This checklist uses GitHub Web and the Android phone only. No terminal, ADB, And
 
 Do not record personal health values, account identifiers, device serial numbers, API keys, passwords, or other secrets. Use synthetic test data only.
 
-QA hotfix note (2026-09-28): a phone run confirmed installation, launch, and camera capture, but voice recognition and meal-photo analysis failed. Those observations belong to the QA hotfix retest and do not satisfy the production-signature prerequisites below. Download `Vitalis-3.15.0-rc1-physical-hotfix-qa` for the scoped retest; keep the final production acceptance state unchanged until all prerequisites exist.
+QA stability note (2026-09-30): the earlier phone run confirmed installation, launch, and camera capture, but voice recognition and meal-photo analysis failed; partial/blank UI and coach display were also reported. Download `Vitalis-3.15.0-rc1-deep-stability-qa` for the reliability retest. It is test-signed and does not satisfy the production-signature prerequisites below.
+
+Before production upgrade acceptance is available, the test-signed deep-stability build may be used for this reliability-only phone pass. Run five cold launches; switch through all six coaches; lock/unlock; background/foreground; use camera and picker; open/return from key and consent settings without losing the active photo; retry analysis; open/return from Health Connect and an installed connector; test airplane mode/reconnect; then restart and confirm date, coach, theme, accent, widgets, preset, meal, consent, and journal persistence.
 
 ## Prerequisites
 

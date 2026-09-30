@@ -10,12 +10,12 @@ This document separates automated evidence from mandatory external acceptance. E
 
 | Area | Automated baseline | RC/physical status |
 |---|---|---|
-| Source/JavaScript | 45/45 before RC-specific additions | Pending RC CI |
-| JVM | 84/84 | Pending RC CI confirmation |
+| Source/JavaScript | 76/76 on run 113 | PASS |
+| JVM | 100/100 on run 113 | PASS |
 | Instrumentation | 10/10 on API 35 emulator | Physical device NOT TESTED |
 | Upgrade | 2/2 synthetic debug-signature executions | Production-signature upgrade BLOCKED |
-| Lint | 0 errors / 54 warnings | No increase permitted |
-| Release package | Minified APK/AAB/R8 passed | RC package pending CI |
+| Lint | 0 errors / 54 unchanged warnings | PASS |
+| Release package | Minified QA APK/AAB/R8/signatures/checksums | PASS — test-signed only |
 
 ## Production signing
 
@@ -98,3 +98,11 @@ The owner confirmed this will be Vitalis's first production signing lineage and 
 The release infrastructure now defines an executable two-phase phone-only path based on a standard encrypted age recovery package, a dedicated private GitHub signing-vault repository, an Android Backup A, an independent Backup B, and a separate confirmation workflow. Production and baseline jobs restore the same package and compare its certificate fingerprint with `VITALIS_SIGNING_IDENTITY.md` before building.
 
 This is infrastructure readiness only. No permanent identity, backup confirmation, production APK/AAB, production-signed baseline, physical upgrade, or physical acceptance result exists until the protected workflows and phone steps actually succeed. The decision therefore remains **RC FAIL**.
+
+## Deep stability audit continuation — 2026-09-30
+
+Real-phone reports of disappearing photos/coach portraits, unreliable connector state, incomplete resume/reload UI, voice failure, and meal-analysis failure were treated as systemic lifecycle evidence. Reliability commit `2bb9c9326c73e00bd1feaada7332daf16be54e97` adds bundled-first portrait routing and fallback, native-before-Web local-state hydration, a private expiring active-scan image cache, truthful selected-day Health Connect/connector evidence, foreground refresh, initialization state guards, startup readiness recovery, and WebView renderer recovery. No product surface was added or removed.
+
+GitHub Actions run 112 caught a real upgrade regression: an absent native journal field was treated as an explicit empty journal and overwrote legacy Web data. The migration semantics were corrected and no assertion was relaxed. GitHub Actions run 113 then passed 76/76 source contracts, 100/100 JVM tests, 10/10 instrumentation tests, and 2/2 synthetic upgrades (188/188 total); lint remained at 0 errors / 54 unchanged warnings, and the minified QA APK/AAB/R8/signature/checksum jobs passed.
+
+The resulting test-signed artifact is `Vitalis-3.15.0-rc1-deep-stability-qa`; see `VITALIS_DEEP_STABILITY_REPORT.md` for its hashes and phone matrix. Previous phone failures remain recorded and a complete phone retest is mandatory; **RC FAIL** remains unchanged.

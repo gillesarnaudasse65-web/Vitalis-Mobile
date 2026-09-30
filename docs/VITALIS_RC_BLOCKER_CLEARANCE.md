@@ -118,3 +118,9 @@ No private repository, secret, key, backup or production artifact is claimed mer
 Phone QA evidence subsequently identified two real-device failures: voice recognition did not return usable text, and a successfully captured meal photo did not proceed to analysis. The scoped hotfix at `de3a05b63cd8b29f30dd267cb9ceca8fef8dc2f5` passed GitHub Actions run 106 with 65 source, 91 JVM, 10 instrumentation, and 2 synthetic-upgrade executions; lint remained at 0 errors / 54 warnings. A minified test-signed artifact named `Vitalis-3.15.0-rc1-physical-hotfix-qa` was generated.
 
 This evidence clears only the automated hotfix regression gate. Voice and live nutrition analysis remain **PHYSICAL RETEST REQUIRED**, while production signing, same-certificate upgrade, and complete physical acceptance remain blocked. PR #13 must stay open and the overall decision remains **RC FAIL**.
+
+## Deep stability continuation — 2026-09-30
+
+The previous phone failures were expanded into a full lifecycle/state audit rather than another isolated hotfix. Commit `2bb9c9326c73e00bd1feaada7332daf16be54e97` preserves the product and signing architecture while hardening coach-image fallback, native/Web state ownership, active nutrition-photo recovery, Health Connect/connector truthfulness, foreground refresh, and bounded WebView initialization/renderer recovery. Dedicated repetition and failure-path tests were added; no existing test was removed.
+
+Run 112 caught a real journal migration overwrite during synthetic upgrade; the absent-versus-empty ownership rule was corrected. GitHub Actions run 113 passed 188/188 automated executions (76 source, 100 JVM, 10 instrumentation, 2 synthetic upgrades), lint with 0 errors / 54 unchanged warnings, and minified QA APK/AAB/R8 generation. This does not clear production signing, same-certificate production upgrade, or physical acceptance. PR #13 remains open and the current decision remains **RC FAIL**.
