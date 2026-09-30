@@ -979,7 +979,16 @@ class MainActivity : ComponentActivity() {
             put("localState", JSONObject().apply {
                 put("selectedCoach", localSnapshot.selectedCoach ?: JSONObject.NULL)
                 put("dashboardSettings", localSnapshot.dashboardSettings ?: JSONObject.NULL)
-                put("localJournal", localSnapshot.localJournal)
+                // Absence means this install predates native Web-state synchronization.
+                // Preserve Web localStorage so sync() can migrate the upgrade journal.
+                put(
+                    "localJournal",
+                    if (localSnapshot.preferences.containsKey(VitalisLocalDataStore.LOCAL_JOURNAL_KEY)) {
+                        localSnapshot.localJournal
+                    } else {
+                        JSONObject.NULL
+                    }
+                )
             })
             put("microphoneEnabled", microphoneEnabled)
             put("speaking", textToSpeech?.isSpeaking == true)

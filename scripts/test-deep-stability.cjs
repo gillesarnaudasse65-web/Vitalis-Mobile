@@ -48,6 +48,8 @@ test('native local state hydrates before coach and dashboard JavaScript initiali
   assert.match(activity, /__vitalisHydratedNativeLocalState=true/);
   assert.match(activity, /localState\.selectedCoach[\s\S]*vitalis-selected-coach-v312/);
   assert.match(activity, /localState\.dashboardSettings[\s\S]*vitalis-offline-v1/);
+  assert.match(activity, /preferences\.containsKey\(VitalisLocalDataStore\.LOCAL_JOURNAL_KEY\)/);
+  assert.match(activity, /if\(Array\.isArray\(localState\.localJournal\)\)/);
 });
 
 test('active nutrition image survives recreation through a private expiring cache', () => {
