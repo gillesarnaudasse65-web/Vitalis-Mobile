@@ -254,8 +254,11 @@
       ? event.target.closest("button,a,[role='button']")
       : null;
     if (!target) return;
-    // The generic legacy label router must never consume a coach-card tap.
-    if (target.closest('.vitalis-native-overlay')) return;
+    // Final UX owns its actions explicitly. The legacy text router must never
+    // reinterpret a modern control (for example "Nia" as an AI action or a
+    // Sources card as a legacy details link) before its real handler runs.
+    if (target.closest("#vitalis-final-ux")) return;
+    if (target.closest(".vitalis-native-overlay")) return;
     var action = actionFor(normalize(
       (target.innerText || "") + " " +
       (target.textContent || "") + " " +
@@ -1342,6 +1345,7 @@
   document.addEventListener("click", function (event) {
     var target = event.target && event.target.closest ? event.target.closest("button,a,[role='button']") : null;
     if (!target) return;
+    if (target.closest("#vitalis-final-ux")) return;
     var label = norm((target.innerText || "") + " " + (target.getAttribute("aria-label") || ""));
     if (/tous.*coach|mes.*coach|voir.*coach|equipe.*coach/.test(label)) {
       event.preventDefault(); event.stopImmediatePropagation();

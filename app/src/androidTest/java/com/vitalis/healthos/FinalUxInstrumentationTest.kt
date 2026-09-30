@@ -24,6 +24,50 @@ import org.junit.runner.RunWith
 class FinalUxInstrumentationTest {
     private val instrument = InstrumentationRegistry.getInstrumentation()
 
+    @Test fun everyCoachAndSourcesPathRemainsSelectableThroughTheRealClickPipeline() {
+        val intent = Intent(instrument.targetContext, MainActivity::class.java).apply {
+            putExtra(MainActivity.EXTRA_FINAL_UX_FIXTURE, true)
+            putExtra(MainActivity.EXTRA_TEST_TODAY_ISO, "2026-09-27")
+        }
+        ActivityScenario.launch<MainActivity>(intent).use { scenario ->
+            ready(scenario)
+            eval(scenario, "VitalisFinalUX.restoreDefaults();true")
+            val coachIds = listOf("general", "nutrition", "activity", "sleep", "recovery", "mental")
+
+            repeat(4) {
+                for (coachId in coachIds) {
+                    assertEquals("true", eval(scenario,
+                        "!!document.querySelector('[data-coach-select=\"$coachId\"]')"))
+                    eval(scenario,
+                        "document.querySelector('[data-coach-select=\"$coachId\"]').click();true")
+                    await(scenario) {
+                        decoded(eval(scenario, "VitalisCoaches.selected().id")) == coachId
+                    }
+                    assertEquals("0", eval(scenario,
+                        "document.querySelectorAll('.vitalis-power-overlay-312,.vux-layer').length"))
+                }
+            }
+
+            eval(scenario, "document.querySelector('[data-nav=sources]').click();true")
+            await(scenario) {
+                eval(scenario, "!!document.querySelector('.vitalis-power-overlay-312')") == "true"
+            }
+            eval(scenario,
+                "document.querySelector('.vitalis-power-overlay-312 .vitalis-native-close').click();true")
+
+            eval(scenario,
+                "window.__savedVitalisShowSources=VitalisConnectorControls.showSources;" +
+                    "VitalisConnectorControls.showSources=function(){throw new Error('synthetic failure')};" +
+                    "document.querySelector('[data-nav=sources]').click();true")
+            await(scenario) {
+                eval(scenario, "!!document.querySelector('[data-view=sources-details]')") == "true"
+            }
+            eval(scenario,
+                "document.querySelector('[data-view=sources-details] [data-close]').click();" +
+                    "VitalisConnectorControls.showSources=window.__savedVitalisShowSources;true")
+        }
+    }
+
     @Test fun themesWidgetsDetailsAndCustomizationRemainInteractiveAndPersistent() {
         val intent = Intent(instrument.targetContext, MainActivity::class.java).apply {
             putExtra(MainActivity.EXTRA_FINAL_UX_FIXTURE, true)

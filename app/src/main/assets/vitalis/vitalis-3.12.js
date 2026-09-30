@@ -194,11 +194,16 @@
   }
 
   function setSelectedCoach(id) {
-    selectedCoachId = coachById(id).id;
+    var selected = coachById(id);
+    selectedCoachId = selected.id;
     localStorage.setItem(SELECTED_COACH_KEY, selectedCoachId);
     window.dispatchEvent(new CustomEvent("vitalis-local-state-changed"));
     document.documentElement.setAttribute("data-vitalis-selected-coach", selectedCoachId);
     updateExistingCoachCard();
+    window.dispatchEvent(new CustomEvent("vitalis-coach-changed", {
+      detail:{id:selected.id,name:selected.name,role:selected.role,image:selected.image}
+    }));
+    return selected;
   }
 
   function updateExistingCoachCard() {
@@ -910,7 +915,10 @@
 
   function showConnectors() {
     connectorState = readJsonBridge("getConnectorStatus", connectorState);
-    var items = connectorState.connectors || [];
+    if (!connectorState || typeof connectorState !== "object") {
+      connectorState = {connectors:[], connectorCount:0};
+    }
+    var items = Array.isArray(connectorState.connectors) ? connectorState.connectors : [];
     var cards = items.map(function (item) {
       return '<div class="vitalis-connector-card-312"><div class="vitalis-connector-top-312"><b>' +
         esc(item.name || item.packageName) + '</b><span class="vitalis-status-312 ' + esc(item.status) + '">' +
@@ -1014,7 +1022,9 @@
     var target = event.target && event.target.closest
       ? event.target.closest("button,a,[role='button']")
       : null;
-    if (!target || target.closest(".vitalis-power-overlay-312")) return;
+    if (!target) return;
+    if (target.closest("#vitalis-final-ux")) return;
+    if (target.closest(".vitalis-power-overlay-312")) return;
     var label = norm((target.innerText || target.textContent || "") + " " +
       (target.getAttribute("aria-label") || "") + " " + (target.getAttribute("title") || ""));
     if (/changer.*coach|change.*coach|choisir.*coach|selectionner.*coach|tous.*coach|mes.*coach|equipe.*coach/.test(label)) {
@@ -1063,7 +1073,10 @@
     selected:function () { return coachById(selectedCoachId); },
     open:showCoachCatalog,
     ask:function (coach) { openCoach(coach && coach.id || selectedCoachId, coach && coach.prompt); },
-    select:function (id) { setSelectedCoach(id); openCoach(id); },
+    // Selection is a state change, not an implicit navigation. Call ask() to
+    // open the selected coach conversation. Keeping both operations separate
+    // makes repeated taps deterministic on a real touch screen.
+    select:function (id) { return setSelectedCoach(id); },
     refresh:function () {
       if (window.VitalisDate) window.VitalisDate.refresh();
       else if (bridge && bridge.refreshHealthDataForDate) bridge.refreshHealthDataForDate(selectedDate());
