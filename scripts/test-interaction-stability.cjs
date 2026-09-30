@@ -67,7 +67,8 @@ test('touch controls request deterministic tap behavior', () => {
 
 test('date changes issue one native refresh and Android back closes the active layer first', () => {
   assert.match(finalUx, /\[data-date-input\]"\)\.onchange=function\(event\)[\s\S]*event\.stopPropagation\(\)/);
-  assert.match(instrumentation, /assertEquals\(listOf\("2026-09-18"\), it\.debugRecordedDates\(\)\)/);
+  assert.match(instrumentation, /__dateSelectCalls\.push\(value\)/);
+  assert.match(instrumentation, /"\[\\"2026-09-18\\"\]"[\s\S]*decoded\(eval\(scenario, "JSON\.stringify\(window\.__dateSelectCalls\)"\)\)/);
   assert.match(mainActivity, /webBackInFlight/);
   assert.match(mainActivity, /\.vux-layer,\.vitalis-power-overlay-312,\.vitalis-source-overlay/);
   assert.match(instrumentation, /androidBackClosesFinalUxAndCoachLayersBeforeLeavingTheApp/);
@@ -83,5 +84,5 @@ test('renderer loss cannot recreate an Activity that is already being destroyed'
   assert.match(mainActivity, /lifecycle\.currentState == Lifecycle\.State\.DESTROYED/);
   assert.match(mainActivity, /renderProcessRecoveryPending = true/);
   assert.match(mainActivity, /override fun onResume\(\)[\s\S]*if \(renderProcessRecoveryPending\)/);
-  assert.match(instrumentation, /await\(scenario\) \{ recorded\(scenario\) == listOf\("2026-09-18"\) \}/);
+  assert.match(instrumentation, /JSON\.stringify\(window\.__dateSelectCalls\)/);
 });

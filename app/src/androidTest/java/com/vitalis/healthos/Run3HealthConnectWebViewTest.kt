@@ -40,10 +40,13 @@ class Run3HealthConnectWebViewTest {
             scenario.onActivity { it.clearDebugRecordedDates() }
             tap(scenario, "#refresh")
             await(scenario) {
-                eval(scenario, "document.querySelector('#stateCode').textContent") ==
-                    "\"PARTIAL_PERMISSION\""
+                recorded(scenario) == listOf("2026-09-18")
             }
             assertEquals(listOf("2026-09-18"), recorded(scenario))
+            assertEquals(
+                "\"PARTIAL_PERMISSION\"",
+                eval(scenario, "document.querySelector('#stateCode').textContent")
+            )
             assertEquals(
                 "\"android.permission.health.READ_SLEEP\"",
                 eval(scenario, "document.querySelector('#missingPermissions').textContent")

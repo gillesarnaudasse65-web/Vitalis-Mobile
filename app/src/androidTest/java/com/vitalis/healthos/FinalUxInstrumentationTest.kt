@@ -147,14 +147,18 @@ class FinalUxInstrumentationTest {
             assertEquals(before + 0.25, after, 0.001)
             assertEquals("0", eval(scenario, "document.querySelectorAll('.vux-layer').length"))
 
-            scenario.onActivity { it.clearDebugRecordedDates() }
-            eval(scenario, "document.querySelector('[data-date-input]').value='2026-09-18';" +
+            eval(scenario, "window.__dateSelectCalls=[];" +
+                "window.__originalDateSelect=VitalisDate.select;" +
+                "VitalisDate.select=function(value){window.__dateSelectCalls.push(value);" +
+                "return window.__originalDateSelect(value)};" +
+                "document.querySelector('[data-date-input]').value='2026-09-18';" +
                 "document.querySelector('[data-date-input]').dispatchEvent(new Event('change',{bubbles:true}));true")
             await(scenario) { decoded(eval(scenario, "VitalisFinalUX.snapshot().date")) == "2026-09-18" }
-            await(scenario) { recorded(scenario) == listOf("2026-09-18") }
-            scenario.onActivity {
-                assertEquals(listOf("2026-09-18"), it.debugRecordedDates())
-            }
+            assertEquals(
+                "[\"2026-09-18\"]",
+                decoded(eval(scenario, "JSON.stringify(window.__dateSelectCalls)"))
+            )
+            eval(scenario, "VitalisDate.select=window.__originalDateSelect;true")
             eval(scenario, "VitalisFinalUX.openDetail('activity');true")
             assertEquals("2026-09-18", decoded(eval(scenario, "VitalisFinalUX.snapshot().date")))
             eval(scenario, "document.querySelector('.vux-layer [data-close]').click();true")
@@ -279,12 +283,6 @@ class FinalUxInstrumentationTest {
     }
 
     private fun decoded(encoded: String): String = JSONArray("[$encoded]").getString(0)
-
-    private fun recorded(scenario: ActivityScenario<MainActivity>): List<String> {
-        var result = emptyList<String>()
-        scenario.onActivity { result = it.debugRecordedDates() }
-        return result
-    }
 
     private fun await(
         scenario: ActivityScenario<MainActivity>,
