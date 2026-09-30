@@ -65,6 +65,41 @@ class FinalUxInstrumentationTest {
             eval(scenario,
                 "document.querySelector('[data-view=sources-details] [data-close]').click();" +
                     "VitalisConnectorControls.showSources=window.__savedVitalisShowSources;true")
+
+            eval(scenario,
+                "VitalisConnectorControls.showSources=function(){};" +
+                    "document.querySelector('[data-nav=sources]').click();true")
+            await(scenario) {
+                eval(scenario, "!!document.querySelector('[data-view=sources-details]')") == "true"
+            }
+            eval(scenario,
+                "document.querySelector('[data-view=sources-details] [data-close]').click();" +
+                    "VitalisConnectorControls.showSources=window.__savedVitalisShowSources;true")
+        }
+    }
+
+    @Test fun androidBackClosesFinalUxAndCoachLayersBeforeLeavingTheApp() {
+        val intent = Intent(instrument.targetContext, MainActivity::class.java).apply {
+            putExtra(MainActivity.EXTRA_FINAL_UX_FIXTURE, true)
+            putExtra(MainActivity.EXTRA_TEST_TODAY_ISO, "2026-09-27")
+        }
+        ActivityScenario.launch<MainActivity>(intent).use { scenario ->
+            ready(scenario)
+            eval(scenario, "VitalisFinalUX.openCustomize();true")
+            await(scenario) { eval(scenario, "!!document.querySelector('.vux-layer')") == "true" }
+            scenario.onActivity { it.onBackPressedDispatcher.onBackPressed() }
+            await(scenario) { eval(scenario, "document.querySelectorAll('.vux-layer').length") == "0" }
+            assertEquals("true", eval(scenario, "!!document.querySelector('#vitalis-final-ux')"))
+
+            eval(scenario, "VitalisCoaches.open();true")
+            await(scenario) {
+                eval(scenario, "!!document.querySelector('.vitalis-power-overlay-312')") == "true"
+            }
+            scenario.onActivity { it.onBackPressedDispatcher.onBackPressed() }
+            await(scenario) {
+                eval(scenario, "document.querySelectorAll('.vitalis-power-overlay-312').length") == "0"
+            }
+            assertEquals("true", eval(scenario, "!!document.querySelector('#vitalis-final-ux')"))
         }
     }
 
@@ -112,9 +147,13 @@ class FinalUxInstrumentationTest {
             assertEquals(before + 0.25, after, 0.001)
             assertEquals("0", eval(scenario, "document.querySelectorAll('.vux-layer').length"))
 
+            scenario.onActivity { it.clearDebugRecordedDates() }
             eval(scenario, "document.querySelector('[data-date-input]').value='2026-09-18';" +
                 "document.querySelector('[data-date-input]').dispatchEvent(new Event('change',{bubbles:true}));true")
             await(scenario) { decoded(eval(scenario, "VitalisFinalUX.snapshot().date")) == "2026-09-18" }
+            scenario.onActivity {
+                assertEquals(listOf("2026-09-18"), it.debugRecordedDates())
+            }
             eval(scenario, "VitalisFinalUX.openDetail('activity');true")
             assertEquals("2026-09-18", decoded(eval(scenario, "VitalisFinalUX.snapshot().date")))
             eval(scenario, "document.querySelector('.vux-layer [data-close]').click();true")

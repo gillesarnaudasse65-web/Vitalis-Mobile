@@ -118,6 +118,7 @@ class MainActivity : ComponentActivity() {
     private var lastHealthConnectPermissionGranted = false
     private var lastHealthConnectAllPermissionsGranted = false
     private var hasResumedOnce = false
+    private var webBackInFlight = false
     private lateinit var dateState: SelectedDateState
     private var selectedHealthDate: LocalDate
         get() = dateState.selected
@@ -543,7 +544,32 @@ class MainActivity : ComponentActivity() {
 
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
-                if (webView.canGoBack()) webView.goBack() else finish()
+                if (webBackInFlight) return
+                if (!::webView.isInitialized) {
+                    finish()
+                    return
+                }
+                webBackInFlight = true
+                val currentWebView = webView
+                currentWebView.evaluateJavascript(
+                    """
+                    (function(){
+                      var nodes=document.querySelectorAll(
+                        '.vux-layer,.vitalis-power-overlay-312,.vitalis-source-overlay,.vitalis-deep-overlay,.vitalis-native-overlay'
+                      );
+                      if(!nodes.length)return false;
+                      var top=nodes[nodes.length-1];
+                      var close=top.querySelector('[data-close],.vitalis-native-close,.vitalis-source-close,.vitalis-deep-close');
+                      if(close)close.click();else top.remove();
+                      return true;
+                    })();
+                    """.trimIndent()
+                ) { handled ->
+                    webBackInFlight = false
+                    if (isFinishing || isDestroyed || currentWebView !== webView) return@evaluateJavascript
+                    if (handled == "true") return@evaluateJavascript
+                    if (currentWebView.canGoBack()) currentWebView.goBack() else finish()
+                }
             }
         })
     }

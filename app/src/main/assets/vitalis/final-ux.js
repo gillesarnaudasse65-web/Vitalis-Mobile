@@ -16,7 +16,7 @@
 
   var ICONS = {
     score:"<path d='M12 3a9 9 0 1 0 9 9'/><path d='M12 12l5-5'/><circle cx='12' cy='12' r='1.2'/>",
-    activity:"<path d='M13 5a2 2 0 1 0 0-4 2 2 0 0 0 4'/><path d='M9 22l2-7 2 2 2 5M6 12l3-4 4 2 3 3 3-1'/>",
+    activity:"<path d='M13 5a2 2 0 1 0 0-4 2 2 0 1 0 0 4'/><path d='M9 22l2-7 2 2 2 5M6 12l3-4 4 2 3 3 3-1'/>",
     heart:"<path d='M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.7l-1.1-1.1a5.5 5.5 0 0 0-7.8 7.8L12 21l8.8-8.6a5.5 5.5 0 0 0 0-7.8Z'/>",
     sleep:"<path d='M20.5 14.2A8.5 8.5 0 0 1 9.8 3.5 8.5 8.5 0 1 0 20.5 14.2Z'/>",
     hydration:"<path d='M12 2S5 10 5 15a7 7 0 0 0 14 0c0-5-7-13-7-13Z'/>",
@@ -272,7 +272,7 @@
     if (id === "sources" && window.VitalisConnectorControls && window.VitalisConnectorControls.showSources) {
       try {
         window.VitalisConnectorControls.showSources();
-        return;
+        if (document.querySelector(".vitalis-power-overlay-312,.vitalis-source-overlay")) return;
       } catch (_) {
         // Continue with the built-in source detail instead of swallowing the tap.
       }
@@ -488,7 +488,6 @@ body.vitalis-final-ux-active{margin:0!important;background:var(--vux-bg)!importa
         event.preventDefault();event.stopPropagation();
         if(window.VitalisCoaches&&window.VitalisCoaches.select){
           window.VitalisCoaches.select(coachSelect.getAttribute("data-coach-select"));
-          render();
         }else toast("La sélection du coach se prépare. Réessayez dans un instant.");
         return;
       }
@@ -510,7 +509,13 @@ body.vitalis-final-ux-active{margin:0!important;background:var(--vux-bg)!importa
       else if(event.target.closest("[data-next]"))shiftDate(1);
       else if(event.target.closest("[data-calendar]")){var input=root.querySelector("[data-date-input]");if(input.showPicker)input.showPicker();else input.click();}
     });
-    root.querySelector("[data-date-input]").onchange=function(){if(window.VitalisDate)window.VitalisDate.select(this.value);health.selectedDate=this.value;render();};
+    root.querySelector("[data-date-input]").onchange=function(event){
+      // VitalisDate owns persistence and the native refresh. Stop the legacy
+      // document listener from issuing the exact same Health Connect read twice.
+      event.stopPropagation();
+      if(window.VitalisDate)window.VitalisDate.select(this.value);
+      health.selectedDate=this.value;render();
+    };
     render();
     window.__vitalisFinalUxMetrics=window.__vitalisFinalUxMetrics||{};window.__vitalisFinalUxMetrics.initialRenderMs=(performance.now?performance.now():Date.now())-renderStart;
     window.__vitalisFinalUx = "ready";

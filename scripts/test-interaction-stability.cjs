@@ -8,6 +8,7 @@ const read = relative => fs.readFileSync(path.join(root, relative), 'utf8');
 const compat = read('app/src/main/assets/vitalis/compat.js');
 const power = read('app/src/main/assets/vitalis/vitalis-3.12.js');
 const finalUx = read('app/src/main/assets/vitalis/final-ux.js');
+const mainActivity = read('app/src/main/java/com/vitalis/healthos/MainActivity.kt');
 const instrumentation = read('app/src/androidTest/java/com/vitalis/healthos/FinalUxInstrumentationTest.kt');
 
 const coachIds = ['general', 'nutrition', 'activity', 'sleep', 'recovery', 'mental'];
@@ -36,6 +37,8 @@ test('coach selection is delegated before generic actions and never implies navi
   assert.match(power, /select:function \(id\) \{ return setSelectedCoach\(id\); \}/);
   assert.match(power, /new CustomEvent\("vitalis-coach-changed"/);
   assert.match(finalUx, /addEventListener\("vitalis-coach-changed",render\)/);
+  const coachBranch = listener.slice(listener.indexOf('if(coachSelect)'), listener.indexOf('var action='));
+  assert.doesNotMatch(coachBranch, /render\(\)/, 'the coach event owns the single render');
 });
 
 test('all six coach chips remain present during repeated selection stress', () => {
@@ -50,13 +53,27 @@ test('all six coach chips remain present during repeated selection stress', () =
 
 test('Sources always has a normal path and a visible built-in fallback', () => {
   assert.match(finalUx, /value==="sources"\)openDetail\("sources"\)/);
-  assert.match(finalUx, /try \{[\s\S]*VitalisConnectorControls\.showSources\(\);[\s\S]*\} catch \(_\)/);
+  assert.match(finalUx, /VitalisConnectorControls\.showSources\(\);[\s\S]*document\.querySelector\("\.vitalis-power-overlay-312,\.vitalis-source-overlay"\)/);
   assert.match(finalUx, /modal\.setAttribute\("data-view", id \+ "-details"\)/);
   assert.match(finalUx, /if \(id === "sources"\).*add\("Sources"/);
   assert.match(power, /Array\.isArray\(connectorState\.connectors\)/);
   assert.match(instrumentation, /synthetic failure/);
+  assert.match(instrumentation, /showSources=function\(\)\{\}/);
 });
 
 test('touch controls request deterministic tap behavior', () => {
   assert.match(finalUx, /#vitalis-final-ux button,#vitalis-final-ux \[role=button\]\{touch-action:manipulation\}/);
+});
+
+test('date changes issue one native refresh and Android back closes the active layer first', () => {
+  assert.match(finalUx, /\[data-date-input\]"\)\.onchange=function\(event\)[\s\S]*event\.stopPropagation\(\)/);
+  assert.match(instrumentation, /assertEquals\(listOf\("2026-09-18"\), it\.debugRecordedDates\(\)\)/);
+  assert.match(mainActivity, /webBackInFlight/);
+  assert.match(mainActivity, /\.vux-layer,\.vitalis-power-overlay-312,\.vitalis-source-overlay/);
+  assert.match(instrumentation, /androidBackClosesFinalUxAndCoachLayersBeforeLeavingTheApp/);
+});
+
+test('every Final UX SVG path is syntactically complete for Android WebView', () => {
+  assert.match(finalUx, /activity:"<path d='M13 5a2 2 0 1 0 0-4 2 2 0 1 0 0 4'/);
+  assert.doesNotMatch(finalUx, /a2 2 0 1 0 0-4 2 2 0 0 0 4/);
 });
