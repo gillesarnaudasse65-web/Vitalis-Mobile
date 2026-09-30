@@ -151,6 +151,7 @@ class FinalUxInstrumentationTest {
             eval(scenario, "document.querySelector('[data-date-input]').value='2026-09-18';" +
                 "document.querySelector('[data-date-input]').dispatchEvent(new Event('change',{bubbles:true}));true")
             await(scenario) { decoded(eval(scenario, "VitalisFinalUX.snapshot().date")) == "2026-09-18" }
+            await(scenario) { recorded(scenario) == listOf("2026-09-18") }
             scenario.onActivity {
                 assertEquals(listOf("2026-09-18"), it.debugRecordedDates())
             }

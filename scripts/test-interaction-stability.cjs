@@ -77,3 +77,11 @@ test('every Final UX SVG path is syntactically complete for Android WebView', ()
   assert.match(finalUx, /activity:"<path d='M13 5a2 2 0 1 0 0-4 2 2 0 1 0 0 4'/);
   assert.doesNotMatch(finalUx, /a2 2 0 1 0 0-4 2 2 0 0 0 4/);
 });
+
+test('renderer loss cannot recreate an Activity that is already being destroyed', () => {
+  assert.match(mainActivity, /override fun onRenderProcessGone[\s\S]*isFinishing \|\| isDestroyed/);
+  assert.match(mainActivity, /lifecycle\.currentState == Lifecycle\.State\.DESTROYED/);
+  assert.match(mainActivity, /renderProcessRecoveryPending = true/);
+  assert.match(mainActivity, /override fun onResume\(\)[\s\S]*if \(renderProcessRecoveryPending\)/);
+  assert.match(instrumentation, /await\(scenario\) \{ recorded\(scenario\) == listOf\("2026-09-18"\) \}/);
+});

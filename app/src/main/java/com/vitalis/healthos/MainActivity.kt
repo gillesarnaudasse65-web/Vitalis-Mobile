@@ -59,6 +59,7 @@ import androidx.health.connect.client.records.SleepSessionRecord
 import androidx.health.connect.client.records.StepsRecord
 import androidx.health.connect.client.records.WeightRecord
 import androidx.health.connect.client.time.TimeRangeFilter
+import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.webkit.JavaScriptReplyProxy
 import androidx.webkit.WebMessageCompat
@@ -119,6 +120,7 @@ class MainActivity : ComponentActivity() {
     private var lastHealthConnectAllPermissionsGranted = false
     private var hasResumedOnce = false
     private var webBackInFlight = false
+    private var renderProcessRecoveryPending = false
     private lateinit var dateState: SelectedDateState
     private var selectedHealthDate: LocalDate
         get() = dateState.selected
@@ -508,7 +510,20 @@ class MainActivity : ComponentActivity() {
                     if (::webView.isInitialized && view === webView) {
                         runCatching { root.removeView(view) }
                         runCatching { view.destroy() }
-                        recreate()
+                        // WebView destruction can report a renderer loss after the Activity has
+                        // already begun teardown. Recreating from that callback leaves a stale
+                        // Activity alive long enough to overwrite the next screen's persisted
+                        // state. Recover only a live foreground Activity; otherwise defer until
+                        // its legitimate next resume.
+                        if (isFinishing || isDestroyed ||
+                            lifecycle.currentState == Lifecycle.State.DESTROYED) {
+                            return true
+                        }
+                        if (lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) {
+                            recreate()
+                        } else {
+                            renderProcessRecoveryPending = true
+                        }
                     }
                     return true
                 }
@@ -717,6 +732,11 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
+        if (renderProcessRecoveryPending) {
+            renderProcessRecoveryPending = false
+            recreate()
+            return
+        }
         val returningToForeground = hasResumedOnce
         hasResumedOnce = true
         ensureHealthConnectClient()
